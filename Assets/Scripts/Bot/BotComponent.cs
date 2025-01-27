@@ -31,6 +31,11 @@ public class BotComponent : MonoBehaviour
         private set => role = value;
     }
     
+    public void SetAgentSpeed(float speed)
+    {
+        agent.speed = speed;
+    }
+    
     public bool IsOnPosition => agent.remainingDistance < 0.01f;
 
     private void Start()
@@ -44,8 +49,8 @@ public class BotComponent : MonoBehaviour
 
     private void Update()
     {
-        if (agent.remainingDistance < 0.01f && _currentZone)
-            agent.destination = _currentZone.GetRandomPointInZone();
+        //if (agent.remainingDistance < 0.01f && _currentZone)
+            //agent.destination = _currentZone.GetRandomPointInZone();
 
         if (!_target) return;
         _currentReactionTime += Time.deltaTime;
@@ -83,6 +88,8 @@ public class BotComponent : MonoBehaviour
     public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
     {
         Role = newRole;
+        SetAgentSpeed(Role == BotRole.Scout ? 3.5f : 5f);
+
         if (initialZone != null)
         {
             MoveToZone(initialZone);
@@ -122,8 +129,10 @@ public class BotComponent : MonoBehaviour
         }
 
         GameManager.Instance.SaveDeathPosition(transform.position);
+        GameManager.Instance.IncreaseDeathCount();
         _teamManager.Bots.Remove(this);
-        var obj = Instantiate(deathEffect, transform.position, Quaternion.identity);
+        var spawnDeathEffect = new Vector3(transform.position.x, 50f, transform.position.z);
+        var obj = Instantiate(deathEffect, spawnDeathEffect, Quaternion.identity);
         DontDestroyOnLoad(obj);
         Destroy(gameObject);
     }

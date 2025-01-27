@@ -12,6 +12,7 @@ public class GameManager : MonoSingleton<GameManager>
     [SerializeField] private float timeScale = 1f;
     [SerializeField] private float roundTime = 120f;
     
+    private float _deathCount;
     private float _currentTime;
     
     private void Start()
@@ -29,6 +30,11 @@ public class GameManager : MonoSingleton<GameManager>
 
     public void RestartGame()
     {
+        if (_deathCount > 5000)
+        {
+            Time.timeScale = 0f;
+            return;
+        }
         UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
     }
     
@@ -50,5 +56,10 @@ public class GameManager : MonoSingleton<GameManager>
     private void OnDestroy()
     {
         SaveDeathPositions();
+    }
+
+    public void IncreaseDeathCount()
+    {
+        _deathCount++;
     }
 }

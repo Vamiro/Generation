@@ -24,15 +24,23 @@ public abstract class TeamManager : MonoBehaviour
     public virtual void Update()
     {
         if (bots.Count != 0) return;
-        Debug.Log($"{otherTeam.name} team has won!");
+        Debug.Log($"{otherTeam.name} has won!");
         GameManager.Instance.RestartGame();
     }
     
     public void NotifyDefenders(MapZoneComponent site)
     {
-        foreach (var defender in Bots.Where(bot => bot.Role == BotRole.Defender))
+        foreach (var defender in Bots)
         {
-            defender.MoveToZone(site);
+            defender.AssignRole(BotRole.Defender, site);
+        }
+    }
+
+    public void NotifyDefendersAboutRotate(MapZoneComponent site)
+    {
+        for (var i = 0; i < Bots.Count / 2 + 1; i++)
+        {
+            Bots[i].AssignRole(BotRole.Defender, site);
         }
     }
 }
