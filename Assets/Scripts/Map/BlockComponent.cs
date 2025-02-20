@@ -16,7 +16,7 @@ public enum BlockType
     Neutral,
     Site,
     Road,
-    Room  // Новый тип для комнаты
+    Room
 }
 
 
@@ -25,7 +25,7 @@ public class BlockData
 {
     [SerializeField]
     private BlockType currentType = BlockType.None;
-
+    
     public BlockData(BlockType initialType)
     {
         currentType = initialType;

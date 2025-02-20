@@ -348,6 +348,7 @@ MonoBehaviour:
   siteZoneHeight: 6
   floorPrefab: {fileID: 2700142948874212555, guid: e7a9f59f26bea1e4883d1e17da6789e1, type: 3}
   wallPrefab: {fileID: 389949903175999369, guid: a238d4769dcc478459799927e274e527, type: 3}
+  coverPrefab: {fileID: 4604575915924467063, guid: c561ebefa408da9488379415caaa4d16, type: 3}
   spawnMaterial: {fileID: 2100000, guid: dd197627c80c69f4faea972f20ca8a97, type: 2}
   roadMaterial: {fileID: 2100000, guid: ceb57e627330bbf4ab01614f5a0904b3, type: 2}
   siteMaterial: {fileID: 2100000, guid: 48e8c8acf44f4d04db2770c62396f61e, type: 2}
@@ -356,6 +357,17 @@ MonoBehaviour:
   floorMaterial: {fileID: 2100000, guid: 221a7748d9526ee41979a27d9302c862, type: 2}
   wallMaterial: {fileID: 2100000, guid: 0eece8546e0a519468a9dbec5bbf6dd8, type: 2}
   roomMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
+  coverSpawnMultiplier: 0.02
+  coverMinProbabilitySpawn: 0.3
+  coverMaxProbabilitySpawn: 0.6
+  coverMinProbabilitySite: 0.2
+  coverMaxProbabilitySite: 0.5
+  coverMinProbabilityMain: 0.4
+  coverMaxProbabilityMain: 0.8
+  coverMinProbabilityLink: 0.4
+  coverMaxProbabilityLink: 0.8
+  coverMinProbabilityRoom: 0.5
+  coverMaxProbabilityRoom: 0.7
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0
