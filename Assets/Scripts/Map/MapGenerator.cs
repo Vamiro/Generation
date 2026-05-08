@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -6,7 +7,7 @@ using Random = UnityEngine.Random;
 using UnityEditor;
 #endif
 
-public class MapGenerator : MonoBehaviour
+public partial class MapGenerator : MonoBehaviour
 {
     [Header("Размер карты")]
     [SerializeField] private int width = 20;    // Количество блоков по X
@@ -14,8 +15,6 @@ public class MapGenerator : MonoBehaviour
 
     [Header("Параметры блока")]
     [SerializeField, Min(0.01f)] private float blockSize = 1f; // Если увеличить, позиции масштабируются
-    [SerializeField, Min(0)] private int mainWidth = 1;      // Толщина основных путей
-    [SerializeField, Min(0)] private int linkWidth = 1;      // Толщина фланговых путей
 
     [Header("Настройки зон")]
     [SerializeField] private int spawnZoneSizeMin = 8;   // Мин. размер зоны спавна
@@ -29,16 +28,63 @@ public class MapGenerator : MonoBehaviour
     [SerializeField, Range(0f, 0.5f)] private float horizontalJitterRatio = 0.1f;
     [SerializeField, Range(0.1f, 0.9f)] private float siteDepthRatio = 0.33f;
     [SerializeField, Min(0)] private int spawnOffset = 2;
+    [SerializeField, Min(0)] private int spawnHorizontalOffset = 3;
+    [SerializeField, Min(1)] private int siteDistanceFromSpawnMin = 6;
+    [SerializeField, Min(1)] private int siteDistanceFromSpawnMax = 64;
+    [SerializeField, Min(0)] private int siteFairnessTolerance = 5;
+    [SerializeField, Min(1)] private int sitePlacementAttempts = 30;
+    [SerializeField, Min(1)] private int siteEntryMin = 2;
+    [SerializeField, Min(0)] private int sitePairDistanceMin = 4;
 
     [Header("Поведение путей")]
     [SerializeField, Range(0f, 1f)] private float mainPathHorizontalChance = 0.85f;
     [SerializeField, Range(0f, 1f)] private float linkPathHorizontalChance = 0.15f;
+    [SerializeField, Range(1, 2)] private int linkConnectionCount = 2;
+    [SerializeField] private bool preferShortestConnections = true;
     [SerializeField] private bool useFixedSeed;
     [SerializeField] private int generationSeed = 42;
+    [SerializeField, ReadOnlyInInspector] private int currentGenerationSeed;
+    [SerializeField] private bool spawnAIsDefender = true;
+    [SerializeField, Min(0)] private int mainWidth = 1;      // Толщина основных путей
+    [SerializeField, Min(0)] private int linkWidth = 1;      // Толщина фланговых путей
+    [SerializeField, Min(0)] private int roadWidthRandomDelta = 1;
+
+    [Header("Детализация дорог")]
+    [SerializeField] private bool addStraightRoadIndentations = true;
+    [SerializeField, Min(3)] private int straightRoadIndentMinLength = 8;
+    [SerializeField, Min(2)] private int straightRoadIndentInterval = 4;
+    [SerializeField, Min(1)] private int straightRoadIndentDepth = 1;
+    [SerializeField, Range(0f, 1f)] private float straightRoadIndentChance = 0.65f;
+
+    [Header("Маршруты link")]
+    [SerializeField] private bool routeLinkViaRoom = true;
+    [SerializeField, Range(0f, 1f)] private float linkViaRoomChance = 1f;
+    [SerializeField, Min(0)] private int linkRoomExitOffset = 1;
+    [SerializeField, Range(0f, 1f)] private float linkHubBlendToCenter = 0.5f;
+    [SerializeField] private bool linkCanMergeIntoMain = true;
+    [SerializeField, Range(0f, 5f)] private float astarLinkMergeMainPenalty = 0.25f;
+
+    [Header("A*")]
+    [SerializeField, Range(0f, 5f)] private float astarTurnPenalty = 0.35f;
+    [SerializeField, Range(0f, 10f)] private float astarRoadReusePenalty = 1.5f;
+    [SerializeField, Range(0f, 10f)] private float astarLinkAvoidMainPenalty = 2f;
+    [SerializeField, Range(0f, 10f)] private float astarMainAvoidLinkPenalty = 1f;
+    [SerializeField, Range(0f, 5f)] private float astarBorderPenalty = 1.5f;
+    [SerializeField, Range(0f, 5f)] private float astarLinkCenterPenalty = 1f;
+    [SerializeField] private bool astarAllowDiagonalMoves = false;
+    [SerializeField, Range(0f, 5f)] private float astarDiagonalPenalty = 1.25f;
+    [SerializeField, Range(0f, 2f)] private float astarRandomJitter = 0.05f;
+    [SerializeField] private bool useCircularPathBrush = false;
+    [SerializeField] private bool useFallbackPathWhenAstarFails = true;
 
     [Header("Комната")]
-    [SerializeField] private bool generateRoomZone;
+    [SerializeField] private bool generateRoomZone = true;
     [SerializeField] private Vector2Int roomSize = new Vector2Int(5, 5);
+    [SerializeField, Min(0)] private int roomGrowthSteps = 24;
+    [SerializeField, Range(0f, 1f)] private float roomGrowthBaseChance = 0.35f;
+    [SerializeField, Range(0f, 2f)] private float roomGrowthDistanceFactor = 0.45f;
+    [SerializeField, Range(0f, 1f)] private float roomEmptyPenaltyFactor = 0.08f;
+    [SerializeField, Min(0)] private int roomAntiMergeContactThreshold = 1;
 
     [Header("Префабы")]
     [SerializeField] private BlockComponent floorPrefab;
@@ -68,6 +114,9 @@ public class MapGenerator : MonoBehaviour
     [SerializeField] private float coverMaxProbabilityLink  = 0.8f;
     [SerializeField] private float coverMinProbabilityRoom  = 0.5f;
     [SerializeField] private float coverMaxProbabilityRoom  = 0.7f;
+    [SerializeField, Min(1)] private int narrowCorridorWidthThreshold = 2;
+    [SerializeField, Range(0.5f, 2f)] private float narrowCorridorCoverMultiplier = 1.3f;
+    [SerializeField, Range(0.5f, 2f)] private float openAreaCoverMultiplier = 1.15f;
 
     private BlockComponent[,] mapGrid;
     private Vector2Int spawnA, spawnB;
@@ -99,8 +148,7 @@ public class MapGenerator : MonoBehaviour
         BlockType.Spawn,
         BlockType.Site,
         BlockType.Main,
-        BlockType.Link,
-        BlockType.Neutral
+        BlockType.Link
     };
 
     private int nextZoneId;
@@ -152,8 +200,8 @@ public class MapGenerator : MonoBehaviour
 
     void GenerateMap()
     {
-        if (useFixedSeed)
-            Random.InitState(generationSeed);
+        currentGenerationSeed = ResolveGenerationSeed();
+        Random.InitState(currentGenerationSeed);
 
         InitializeZoneCollections();
         CreateFloorGrid();
@@ -174,6 +222,11 @@ public class MapGenerator : MonoBehaviour
 
         // Расставляем укрытия по обновленной логике
         PlaceCovers();
+    }
+
+    int ResolveGenerationSeed()
+    {
+        return useFixedSeed ? generationSeed : Guid.NewGuid().GetHashCode();
     }
 
     void InitializeZoneCollections()
@@ -215,6 +268,18 @@ public class MapGenerator : MonoBehaviour
         Right
     }
 
+    private readonly struct TeamRoutePlan
+    {
+        public TeamRoutePlan(Vector2Int spawn, Vector2Int linkSite)
+        {
+            Spawn = spawn;
+            LinkSite = linkSite;
+        }
+
+        public Vector2Int Spawn { get; }
+        public Vector2Int LinkSite { get; }
+    }
+
     private sealed class ZoneRegion
     {
         public BlockType Type;
@@ -237,18 +302,10 @@ public class MapGenerator : MonoBehaviour
         LayoutSettings layout = BuildLayoutSettings();
         PlaceSpawnZones(layout);
         PlaceSiteZones(layout);
-
-        CreateLinkConnection(spawnA, siteB);
-        CreateLinkConnection(spawnB, siteA);
-        CreateLinkConnection(spawnA, siteA);
-        CreateLinkConnection(spawnB, siteB);
-
-        CreateMainConnection(spawnA, siteA);
-        CreateMainConnection(spawnB, siteB);
-        CreateMainConnection(spawnA, siteB);
-        CreateMainConnection(spawnB, siteA);
-
         MarkRoomZone();
+        BuildStructuredRoutes();
+
+        GrowRoomZones();
     }
 
     LayoutSettings BuildLayoutSettings()
@@ -264,439 +321,6 @@ public class MapGenerator : MonoBehaviour
             HorizontalJitter = Mathf.Max(1, Mathf.RoundToInt(usableWidth * horizontalJitterRatio)),
             SiteDepth = Mathf.Clamp(Mathf.RoundToInt(usableHeight * siteDepthRatio), 0, usableHeight - 1)
         };
-    }
-
-    void PlaceSpawnZones(LayoutSettings layout)
-    {
-        int centerX = layout.UsableWidth / 2;
-        int topBandEnd = Mathf.Max(1, layout.SpawnBandSize);
-        int bottomBandStart = Mathf.Max(0, layout.UsableHeight - layout.SpawnBandSize);
-
-        spawnA = new Vector2Int(
-            ClampGridX(centerX + Random.Range(-layout.HorizontalJitter, layout.HorizontalJitter + 1)),
-            ClampGridZ(Random.Range(0, topBandEnd)));
-
-        spawnB = new Vector2Int(
-            ClampGridX(centerX + Random.Range(-layout.HorizontalJitter, layout.HorizontalJitter + 1)),
-            ClampGridZ(Random.Range(bottomBandStart, layout.UsableHeight)));
-
-        int spawnSizeA = Random.Range(spawnZoneSizeMin, spawnZoneSizeMax + 1);
-        ClearZone(spawnA.x, spawnA.y, spawnSizeA / 2, spawnSizeA - spawnSizeA / 2, BlockType.Spawn);
-
-        int spawnSizeB = Random.Range(spawnZoneSizeMin, spawnZoneSizeMax + 1);
-        ClearZone(spawnB.x, spawnB.y, spawnSizeB / 2, spawnSizeB - spawnSizeB / 2, BlockType.Spawn);
-    }
-
-    void PlaceSiteZones(LayoutSettings layout)
-    {
-        int sideBandSize = Mathf.Max(1, layout.SpawnBandSize);
-        int rightBandStart = Mathf.Max(0, layout.UsableWidth - sideBandSize);
-        int siteZ = ClampGridZ(layout.SiteDepth + Random.Range(-layout.HorizontalJitter, layout.HorizontalJitter + 1));
-
-        siteA = new Vector2Int(ClampGridX(Random.Range(0, sideBandSize)), siteZ);
-        siteB = new Vector2Int(ClampGridX(Random.Range(rightBandStart, layout.UsableWidth)), siteZ);
-
-        ClearZone(siteA.x, siteA.y, siteZoneWidth, siteZoneHeight, BlockType.Site);
-        ClearZone(siteB.x, siteB.y, siteZoneWidth, siteZoneHeight, BlockType.Site);
-    }
-
-    void MarkRoomZone()
-    {
-        if (!generateRoomZone)
-            return;
-
-        int midX = (spawnA.x + spawnB.x + siteA.x + siteB.x) / 4;
-        int midZ = (spawnA.y + spawnB.y + siteA.y + siteB.y) / 4;
-        int sizeX = Mathf.Max(1, roomSize.x);
-        int sizeZ = Mathf.Max(1, roomSize.y);
-        ClearZone(midX - sizeX / 2, midZ - sizeZ / 2, sizeX, sizeZ, BlockType.Room);
-    }
-
-    void CreateMainConnection(Vector2Int spawnPoint, Vector2Int sitePoint)
-    {
-        Vector2Int endpoint = GetRandomEdgePoint(sitePoint, siteZoneWidth, siteZoneHeight, spawnPoint);
-        CreatePath(spawnPoint, endpoint, BlockType.Main, mainWidth, mainPathHorizontalChance, true);
-    }
-
-    void CreateLinkConnection(Vector2Int spawnPoint, Vector2Int sitePoint)
-    {
-        Vector2Int start = GetRandomPointNear(spawnPoint, spawnOffset);
-        Vector2Int endpoint = GetRandomEdgePoint(sitePoint, siteZoneWidth, siteZoneHeight, start);
-        CreatePath(start, endpoint, BlockType.Link, linkWidth, linkPathHorizontalChance, false);
-    }
-
-    Vector2Int GetRandomEdgePoint(Vector2Int zoneOrigin, int zoneWidth, int zoneHeight, Vector2Int referencePoint)
-    {
-        Vector2Int topCenter = new Vector2Int(zoneOrigin.x + zoneWidth / 2, zoneOrigin.y);
-        Vector2Int bottomCenter = new Vector2Int(zoneOrigin.x + zoneWidth / 2, zoneOrigin.y + zoneHeight - 1);
-        Vector2Int leftCenter = new Vector2Int(zoneOrigin.x, zoneOrigin.y + zoneHeight / 2);
-        Vector2Int rightCenter = new Vector2Int(zoneOrigin.x + zoneWidth - 1, zoneOrigin.y + zoneHeight / 2);
-
-        float dTop = Vector2Int.Distance(referencePoint, topCenter);
-        float dBottom = Vector2Int.Distance(referencePoint, bottomCenter);
-        float dLeft = Vector2Int.Distance(referencePoint, leftCenter);
-        float dRight = Vector2Int.Distance(referencePoint, rightCenter);
-
-        ZoneEdge chosenEdge = ZoneEdge.Top;
-        float min = dTop;
-        if (dBottom < min) { min = dBottom; chosenEdge = ZoneEdge.Bottom; }
-        if (dLeft < min) { min = dLeft; chosenEdge = ZoneEdge.Left; }
-        if (dRight < min) { chosenEdge = ZoneEdge.Right; }
-
-        switch (chosenEdge)
-        {
-            case ZoneEdge.Top:
-                return new Vector2Int(
-                    ClampGridX(Random.Range(zoneOrigin.x, zoneOrigin.x + zoneWidth)),
-                    ClampGridZ(zoneOrigin.y));
-            case ZoneEdge.Bottom:
-                return new Vector2Int(
-                    ClampGridX(Random.Range(zoneOrigin.x, zoneOrigin.x + zoneWidth)),
-                    ClampGridZ(zoneOrigin.y + zoneHeight - 1));
-            case ZoneEdge.Left:
-                return new Vector2Int(
-                    ClampGridX(zoneOrigin.x),
-                    ClampGridZ(Random.Range(zoneOrigin.y, zoneOrigin.y + zoneHeight)));
-            case ZoneEdge.Right:
-                return new Vector2Int(
-                    ClampGridX(zoneOrigin.x + zoneWidth - 1),
-                    ClampGridZ(Random.Range(zoneOrigin.y, zoneOrigin.y + zoneHeight)));
-            default:
-                return new Vector2Int(ClampGridX(zoneOrigin.x), ClampGridZ(zoneOrigin.y));
-        }
-    }
-
-    Vector2Int GetRandomPointNear(Vector2Int basePoint, int offsetRange)
-    {
-        int offsetX = Random.Range(-offsetRange, offsetRange + 1);
-        int offsetY = Random.Range(-offsetRange, offsetRange + 1);
-        return new Vector2Int(ClampGridX(basePoint.x + offsetX), ClampGridZ(basePoint.y + offsetY));
-    }
-
-    void ClearZone(int startX, int startZ, int sizeX, int sizeZ, BlockType type)
-    {
-        for (int x = startX; x < startX + sizeX; x++)
-        {
-            for (int z = startZ; z < startZ + sizeZ; z++)
-                TryMarkBlock(x, z, type);
-        }
-    }
-
-    void CreatePath(
-        Vector2Int startPoint,
-        Vector2Int endPoint,
-        BlockType blockType,
-        int pathWidth,
-        float horizontalMoveChance,
-        bool writeWeight)
-    {
-        int x = ClampGridX(startPoint.x);
-        int z = ClampGridZ(startPoint.y);
-        int endX = ClampGridX(endPoint.x);
-        int endZ = ClampGridZ(endPoint.y);
-        int weight = 1;
-
-        while (x != endX || z != endZ)
-        {
-            PaintPathBrush(x, z, pathWidth, blockType, writeWeight ? (int?)weight : null);
-            StepTowardsTarget(ref x, ref z, endX, endZ, horizontalMoveChance);
-            if (writeWeight)
-                weight++;
-        }
-
-        PaintPathBrush(endX, endZ, pathWidth, blockType, writeWeight ? (int?)weight : null);
-    }
-
-    void PaintPathBrush(int centerX, int centerZ, int pathWidth, BlockType blockType, int? weight)
-    {
-        for (int dx = -pathWidth; dx <= pathWidth; dx++)
-        {
-            for (int dz = -pathWidth; dz <= pathWidth; dz++)
-                TryMarkBlock(centerX + dx, centerZ + dz, blockType, weight);
-        }
-    }
-
-    void StepTowardsTarget(ref int x, ref int z, int targetX, int targetZ, float horizontalChance)
-    {
-        bool moveXFirst = Random.value < horizontalChance;
-        if (moveXFirst)
-        {
-            if (MoveAxis(ref x, targetX))
-                return;
-            MoveAxis(ref z, targetZ);
-            return;
-        }
-
-        if (MoveAxis(ref z, targetZ))
-            return;
-        MoveAxis(ref x, targetX);
-    }
-
-    bool MoveAxis(ref int current, int target)
-    {
-        if (current == target)
-            return false;
-
-        current += current < target ? 1 : -1;
-        return true;
-    }
-
-    void BuildAndRegisterZoneObjects()
-    {
-        MapManager mapManager = MapManager.Instance;
-        if (mapManager == null)
-            return;
-
-        mapManager.ClearZones();
-        nextZoneId = 1;
-
-        List<ZoneRegion> regions = ExtractAllRegions();
-        regions.Sort((a, b) =>
-        {
-            int typeCompare = a.Type.CompareTo(b.Type);
-            if (typeCompare != 0)
-                return typeCompare;
-
-            int xCompare = a.Min.x.CompareTo(b.Min.x);
-            return xCompare != 0 ? xCompare : a.Min.y.CompareTo(b.Min.y);
-        });
-
-        List<SiteZoneComponent> siteZones = new();
-        List<RoadZoneComponent> roadZones = new();
-
-        foreach (ZoneRegion region in regions)
-        {
-            MapZoneComponent zone = InstantiateZoneForRegion(region);
-            if (zone == null)
-                continue;
-
-            mapManager.RegisterZone(zone);
-            if (zone is SiteZoneComponent siteZone)
-                siteZones.Add(siteZone);
-            else if (zone is RoadZoneComponent roadZone)
-                roadZones.Add(roadZone);
-        }
-
-        AssignRoadTargets(roadZones, siteZones);
-    }
-
-    List<ZoneRegion> ExtractAllRegions()
-    {
-        List<ZoneRegion> regions = new();
-        foreach (BlockType zoneType in RuntimeZoneTypes)
-            regions.AddRange(ExtractRegionsForType(zoneType));
-
-        return regions;
-    }
-
-    List<ZoneRegion> ExtractRegionsForType(BlockType zoneType)
-    {
-        List<ZoneRegion> regions = new();
-        bool[,] visited = new bool[width, height];
-
-        for (int x = 0; x < width; x++)
-        {
-            for (int z = 0; z < height; z++)
-            {
-                if (visited[x, z] || mapGrid[x, z].blockType.Current != zoneType)
-                    continue;
-
-                regions.Add(FloodFillRegion(x, z, zoneType, visited));
-            }
-        }
-
-        return regions;
-    }
-
-    ZoneRegion FloodFillRegion(int startX, int startZ, BlockType zoneType, bool[,] visited)
-    {
-        Queue<Vector2Int> queue = new();
-        queue.Enqueue(new Vector2Int(startX, startZ));
-        visited[startX, startZ] = true;
-
-        ZoneRegion region = new ZoneRegion
-        {
-            Type = zoneType,
-            Min = new Vector2Int(startX, startZ),
-            Max = new Vector2Int(startX, startZ)
-        };
-
-        while (queue.Count > 0)
-        {
-            Vector2Int current = queue.Dequeue();
-            region.Cells.Add(current);
-
-            if (current.x < region.Min.x) region.Min.x = current.x;
-            if (current.y < region.Min.y) region.Min.y = current.y;
-            if (current.x > region.Max.x) region.Max.x = current.x;
-            if (current.y > region.Max.y) region.Max.y = current.y;
-
-            TryEnqueueRegionCell(current.x + 1, current.y, zoneType, visited, queue);
-            TryEnqueueRegionCell(current.x - 1, current.y, zoneType, visited, queue);
-            TryEnqueueRegionCell(current.x, current.y + 1, zoneType, visited, queue);
-            TryEnqueueRegionCell(current.x, current.y - 1, zoneType, visited, queue);
-        }
-
-        return region;
-    }
-
-    void TryEnqueueRegionCell(int x, int z, BlockType zoneType, bool[,] visited, Queue<Vector2Int> queue)
-    {
-        if (!IsInsideMap(x, z) || visited[x, z] || mapGrid[x, z].blockType.Current != zoneType)
-            return;
-
-        visited[x, z] = true;
-        queue.Enqueue(new Vector2Int(x, z));
-    }
-
-    MapZoneComponent InstantiateZoneForRegion(ZoneRegion region)
-    {
-        GameObject zoneObject = new GameObject($"{region.Type}Zone_{nextZoneId}");
-        zoneObject.transform.SetParent(transform, false);
-        zoneObject.transform.position = region.GetCenterWorld(blockSize);
-
-        BoxCollider boxCollider = zoneObject.AddComponent<BoxCollider>();
-        boxCollider.size = new Vector3(
-            (region.Max.x - region.Min.x + 1) * blockSize,
-            Mathf.Max(0.1f, blockSize * 0.5f),
-            (region.Max.y - region.Min.y + 1) * blockSize);
-        boxCollider.center = Vector3.zero;
-
-        MapZoneComponent zoneComponent;
-        switch (region.Type)
-        {
-            case BlockType.Spawn:
-                zoneComponent = zoneObject.AddComponent<SpawnZoneComponent>();
-                break;
-            case BlockType.Site:
-                zoneComponent = zoneObject.AddComponent<SiteZoneComponent>();
-                break;
-            case BlockType.Main:
-            case BlockType.Link:
-                RoadZoneComponent roadZone = zoneObject.AddComponent<RoadZoneComponent>();
-                roadZone.roadType = region.Type == BlockType.Main ? RoadType.Main : RoadType.Link;
-                zoneComponent = roadZone;
-                break;
-            case BlockType.Neutral:
-                zoneComponent = zoneObject.AddComponent<NeutralZoneComponent>();
-                break;
-            default:
-                Destroy(zoneObject);
-                return null;
-        }
-
-        zoneComponent.InitializeZone(nextZoneId, boxCollider);
-        zoneComponent.SetSamplePoints(BuildSamplePoints(region));
-        nextZoneId++;
-        region.ZoneComponent = zoneComponent;
-        return zoneComponent;
-    }
-
-    List<Vector3> BuildSamplePoints(ZoneRegion region)
-    {
-        List<Vector3> samplePoints = new(region.Cells.Count);
-        foreach (Vector2Int cell in region.Cells)
-            samplePoints.Add(new Vector3(cell.x * blockSize, 0f, cell.y * blockSize));
-
-        return samplePoints;
-    }
-
-    void AssignRoadTargets(List<RoadZoneComponent> roadZones, List<SiteZoneComponent> siteZones)
-    {
-        if (roadZones.Count == 0 || siteZones.Count == 0)
-        {
-            Debug.LogWarning("MapGenerator: невозможно связать roadToSite — отсутствуют дороги или сайты.");
-            return;
-        }
-
-        foreach (RoadZoneComponent road in roadZones)
-        {
-            road.roadToSite = FindClosestSite(road.transform.position, siteZones);
-        }
-
-        EnsureRoadCoverage(siteZones, roadZones, RoadType.Main);
-        EnsureRoadCoverage(siteZones, roadZones, RoadType.Link);
-    }
-
-    SiteZoneComponent FindClosestSite(Vector3 position, List<SiteZoneComponent> siteZones)
-    {
-        SiteZoneComponent closestSite = null;
-        float bestDistance = float.MaxValue;
-
-        foreach (SiteZoneComponent site in siteZones)
-        {
-            float sqrDistance = (site.transform.position - position).sqrMagnitude;
-            if (sqrDistance >= bestDistance)
-                continue;
-
-            bestDistance = sqrDistance;
-            closestSite = site;
-        }
-
-        return closestSite;
-    }
-
-    void EnsureRoadCoverage(List<SiteZoneComponent> siteZones, List<RoadZoneComponent> roadZones, RoadType roadType)
-    {
-        bool hasRoadsOfType = false;
-        foreach (RoadZoneComponent road in roadZones)
-        {
-            if (road.roadType == roadType)
-            {
-                hasRoadsOfType = true;
-                break;
-            }
-        }
-
-        if (!hasRoadsOfType)
-        {
-            Debug.LogWarning($"MapGenerator: не найдено дорог типа {roadType}.");
-            return;
-        }
-
-        foreach (SiteZoneComponent site in siteZones)
-        {
-            bool isCovered = false;
-            foreach (RoadZoneComponent road in roadZones)
-            {
-                if (road.roadType == roadType && road.roadToSite == site)
-                {
-                    isCovered = true;
-                    break;
-                }
-            }
-
-            if (isCovered)
-                continue;
-
-            RoadZoneComponent fallbackRoad = FindClosestRoad(site.transform.position, roadZones, roadType);
-            if (fallbackRoad != null)
-            {
-                fallbackRoad.roadToSite = site;
-                Debug.LogWarning($"MapGenerator: fallback-назначение {roadType} дороги для сайта {site.name}.");
-            }
-        }
-    }
-
-    RoadZoneComponent FindClosestRoad(Vector3 position, List<RoadZoneComponent> roadZones, RoadType roadType)
-    {
-        RoadZoneComponent closestRoad = null;
-        float bestDistance = float.MaxValue;
-
-        foreach (RoadZoneComponent road in roadZones)
-        {
-            if (road.roadType != roadType)
-                continue;
-
-            float sqrDistance = (road.transform.position - position).sqrMagnitude;
-            if (sqrDistance >= bestDistance)
-                continue;
-
-            bestDistance = sqrDistance;
-            closestRoad = road;
-        }
-
-        return closestRoad;
     }
 
     void UpdateMap()
@@ -751,84 +375,6 @@ public class MapGenerator : MonoBehaviour
         }
     }
 
-    void ValidateGeneratedLayout()
-    {
-        if (!zoneBlocks.TryGetValue(BlockType.Main, out HashSet<BlockComponent> mainBlocks) || mainBlocks.Count == 0)
-            Debug.LogWarning("MapGenerator: после генерации отсутствуют Main пути.");
-
-        if (!zoneBlocks.TryGetValue(BlockType.Link, out HashSet<BlockComponent> linkBlocks) || linkBlocks.Count == 0)
-            Debug.LogWarning("MapGenerator: после генерации отсутствуют Link пути.");
-
-        for (int x = 0; x < width; x++)
-        {
-            for (int z = 0; z < height; z++)
-            {
-                if (mapGrid[x, z].blockType.Current == BlockType.Site && IsBorder(x, z))
-                {
-                    Debug.LogWarning($"MapGenerator: сайт попал на границу карты ({x}, {z}).");
-                    break;
-                }
-            }
-        }
-
-        Vector2Int[] spawns = { spawnA, spawnB };
-        Vector2Int[] sites = { siteA, siteB };
-        foreach (Vector2Int spawn in spawns)
-        {
-            foreach (Vector2Int site in sites)
-            {
-                if (IsReachable(spawn, site))
-                    continue;
-
-                Debug.LogWarning($"MapGenerator: нет пути от спавна {spawn} к сайту {site}.");
-            }
-        }
-    }
-
-    bool IsReachable(Vector2Int start, Vector2Int end)
-    {
-        int startX = ClampGridX(start.x);
-        int startZ = ClampGridZ(start.y);
-        int endX = ClampGridX(end.x);
-        int endZ = ClampGridZ(end.y);
-
-        if (!IsWalkableCell(startX, startZ) || !IsWalkableCell(endX, endZ))
-            return false;
-
-        bool[,] visited = new bool[width, height];
-        Queue<Vector2Int> queue = new();
-        queue.Enqueue(new Vector2Int(startX, startZ));
-        visited[startX, startZ] = true;
-
-        while (queue.Count > 0)
-        {
-            Vector2Int current = queue.Dequeue();
-            if (current.x == endX && current.y == endZ)
-                return true;
-
-            TryEnqueueReachable(current.x + 1, current.y, visited, queue);
-            TryEnqueueReachable(current.x - 1, current.y, visited, queue);
-            TryEnqueueReachable(current.x, current.y + 1, visited, queue);
-            TryEnqueueReachable(current.x, current.y - 1, visited, queue);
-        }
-
-        return false;
-    }
-
-    void TryEnqueueReachable(int x, int z, bool[,] visited, Queue<Vector2Int> queue)
-    {
-        if (!IsInsideMap(x, z) || visited[x, z] || !IsWalkableCell(x, z))
-            return;
-
-        visited[x, z] = true;
-        queue.Enqueue(new Vector2Int(x, z));
-    }
-
-    bool IsWalkableCell(int x, int z)
-    {
-        return IsInsideMap(x, z) && mapGrid[x, z].blockType.Current != BlockType.Wall;
-    }
-
     void DuplicateWallBlocks()
     {
         for (int x = 0; x < width; x++)
@@ -851,122 +397,6 @@ public class MapGenerator : MonoBehaviour
             if (wallMaterial != null && wallBlock.Renderer != null)
                 wallBlock.Renderer.material = wallMaterial;
         }
-    }
-
-    bool IsEdgeBlock(int gridX, int gridZ, BlockType zoneType)
-    {
-        int[] dx = { 0, 1, 0, -1 };
-        int[] dz = { 1, 0, -1, 0 };
-        for (int i = 0; i < 4; i++)
-        {
-            int nx = gridX + dx[i];
-            int nz = gridZ + dz[i];
-            if (IsInsideMap(nx, nz) && mapGrid[nx, nz].blockType.Current != zoneType)
-                return true;
-        }
-
-        return false;
-    }
-
-    bool IsJunctionBlock(int gridX, int gridZ, BlockType zoneType)
-    {
-        int diffCount = 0;
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                if (dx == 0 && dz == 0)
-                    continue;
-
-                int nx = gridX + dx;
-                int nz = gridZ + dz;
-                if (IsInsideMap(nx, nz) && mapGrid[nx, nz].blockType.Current != zoneType)
-                    diffCount++;
-            }
-        }
-
-        return diffCount >= 2;
-    }
-
-    void PlaceCovers()
-    {
-        if (coverPrefab == null)
-            return;
-
-        foreach (BlockType zone in CoverZones)
-        {
-            if (!zoneBlocks.TryGetValue(zone, out HashSet<BlockComponent> blocks))
-                continue;
-
-            foreach (BlockComponent block in blocks)
-            {
-                int gridX = Mathf.RoundToInt(block.transform.position.x / blockSize);
-                int gridZ = Mathf.RoundToInt(block.transform.position.z / blockSize);
-                float density = CalculateLocalDensity(gridX, gridZ, zone);
-
-                if (!TryGetCoverProbability(zone, gridX, gridZ, density, out float baseProbability))
-                    continue;
-
-                float probability = Mathf.Clamp01(baseProbability * coverSpawnMultiplier);
-                if (Random.value < probability)
-                {
-                    Vector3 coverPos = block.transform.position + new Vector3(0f, blockSize, 0f);
-                    Instantiate(coverPrefab, coverPos, Quaternion.identity, transform);
-                }
-            }
-        }
-    }
-
-    bool TryGetCoverProbability(BlockType zone, int gridX, int gridZ, float density, out float probability)
-    {
-        probability = 0f;
-        if (zone == BlockType.Main || zone == BlockType.Link)
-        {
-            if (!IsEdgeBlock(gridX, gridZ, zone) && !IsJunctionBlock(gridX, gridZ, zone))
-                return false;
-
-            probability = zone == BlockType.Main
-                ? Mathf.Lerp(coverMaxProbabilityMain, coverMinProbabilityMain, density)
-                : Mathf.Lerp(coverMaxProbabilityLink, coverMinProbabilityLink, density);
-            return true;
-        }
-
-        switch (zone)
-        {
-            case BlockType.Spawn:
-                probability = Mathf.Lerp(coverMaxProbabilitySpawn, coverMinProbabilitySpawn, density);
-                return true;
-            case BlockType.Site:
-                probability = Mathf.Lerp(coverMaxProbabilitySite, coverMinProbabilitySite, density);
-                return true;
-            case BlockType.Room:
-                probability = Mathf.Lerp(coverMaxProbabilityRoom, coverMinProbabilityRoom, density);
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    float CalculateLocalDensity(int gridX, int gridZ, BlockType zoneType)
-    {
-        int count = 0;
-        int total = 0;
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                int nx = gridX + dx;
-                int nz = gridZ + dz;
-                if (!IsInsideMap(nx, nz))
-                    continue;
-
-                total++;
-                if (mapGrid[nx, nz].blockType.Current == zoneType)
-                    count++;
-            }
-        }
-
-        return total == 0 ? 0f : (float)count / total;
     }
 
     bool TryMarkBlock(int x, int z, BlockType type, int? weight = null, bool trackZone = true)

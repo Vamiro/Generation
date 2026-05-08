@@ -183,7 +183,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 60
+  orthographic size: 100
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -208,7 +208,7 @@ Transform:
   m_GameObject: {fileID: 689928811}
   serializedVersion: 2
   m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 49, y: 43.17, z: 59.6}
+  m_LocalPosition: {x: 100, y: 50, z: 100}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -337,15 +337,60 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0410d3a21264d8045a7b4e0dd3ea1b3c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  width: 60
-  height: 60
+  width: 100
+  height: 100
   blockSize: 2
-  mainWidth: 1
-  linkWidth: 1
+  mainWidth: 2
+  linkWidth: 2
   spawnZoneSizeMin: 10
   spawnZoneSizeMax: 14
   siteZoneWidth: 6
   siteZoneHeight: 6
+  innerPadding: 4
+  spawnBandRatio: 0.25
+  horizontalJitterRatio: 0.1
+  siteDepthRatio: 0.33
+  spawnOffset: 2
+  spawnHorizontalOffset: 3
+  siteDistanceFromSpawnMin: 6
+  siteDistanceFromSpawnMax: 64
+  siteFairnessTolerance: 5
+  sitePlacementAttempts: 30
+  siteEntryMin: 2
+  sitePairDistanceMin: 4
+  mainPathHorizontalChance: 0.85
+  linkPathHorizontalChance: 0.15
+  mainConnectionCount: 2
+  linkConnectionCount: 2
+  preferShortestConnections: 1
+  enforceSiteCoverage: 1
+  useFixedSeed: 1
+  generationSeed: 44
+  spawnAIsDefender: 1
+  routeLinkViaRoom: 1
+  linkViaRoomChance: 1
+  linkRoomExitOffset: 1
+  linkHubBlendToCenter: 0.5
+  linkCanMergeIntoMain: 1
+  astarLinkMergeMainPenalty: 0.25
+  astarTurnPenalty: 0.3
+  astarRoadReusePenalty: 0
+  astarLinkAvoidMainPenalty: 2
+  astarMainAvoidLinkPenalty: 1
+  astarBorderPenalty: 1.5
+  astarLinkCenterPenalty: 1
+  astarAllowDiagonalMoves: 1
+  astarDiagonalPenalty: 0.9
+  astarRandomJitter: 0.45
+  useCircularPathBrush: 1
+  useFallbackPathWhenAstarFails: 1
+  generateRoomZone: 1
+  roomSize: {x: 9, y: 10}
+  roomGrowthSteps: 12
+  roomGrowthBaseChance: 0.35
+  roomGrowthDistanceFactor: 0.45
+  roomEmptyPenaltyFactor: 0.08
+  roomAntiMergeContactThreshold: 1
   floorPrefab: {fileID: 2700142948874212555, guid: e7a9f59f26bea1e4883d1e17da6789e1, type: 3}
   wallPrefab: {fileID: 389949903175999369, guid: a238d4769dcc478459799927e274e527, type: 3}
   coverPrefab: {fileID: 4604575915924467063, guid: c561ebefa408da9488379415caaa4d16, type: 3}
@@ -368,6 +413,9 @@ MonoBehaviour:
   coverMaxProbabilityLink: 0.8
   coverMinProbabilityRoom: 0.5
   coverMaxProbabilityRoom: 0.7
+  narrowCorridorWidthThreshold: 2
+  narrowCorridorCoverMultiplier: 1.3
+  openAreaCoverMultiplier: 1.15
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0
