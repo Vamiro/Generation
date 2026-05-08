@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public class MapZoneComponent : MonoBehaviour
@@ -14,6 +15,18 @@ public class MapZoneComponent : MonoBehaviour
     
     [Header("Zone Collider")]
     [SerializeField] private BoxCollider boxCollider;
+    private List<Vector3> samplePoints = new();
+
+    public void InitializeZone(int zoneId, BoxCollider collider)
+    {
+        id = zoneId;
+        boxCollider = collider;
+    }
+
+    public void SetSamplePoints(List<Vector3> points)
+    {
+        samplePoints = points ?? new List<Vector3>();
+    }
 
     public float GetWeight(BotRole role)
     {
@@ -29,6 +42,12 @@ public class MapZoneComponent : MonoBehaviour
 
     public Vector3 GetRandomPointInZone()
     {
+        if (samplePoints.Count > 0)
+            return samplePoints[Random.Range(0, samplePoints.Count)];
+
+        if (boxCollider == null)
+            return transform.position;
+
         return new Vector3(
             Random.Range(boxCollider.bounds.min.x, boxCollider.bounds.max.x),
             boxCollider.bounds.center.y,

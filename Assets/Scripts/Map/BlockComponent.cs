@@ -1,8 +1,5 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 public enum BlockType
 {
@@ -56,4 +53,20 @@ public class BlockComponent : MonoBehaviour
 {
     public BlockData blockType = new BlockData(BlockType.None);
     public int weight = 0;
+    private MeshRenderer cachedRenderer;
+
+    public MeshRenderer Renderer
+    {
+        get
+        {
+            if (cachedRenderer == null)
+                cachedRenderer = GetComponent<MeshRenderer>();
+            return cachedRenderer;
+        }
+    }
+
+    private void Awake()
+    {
+        cachedRenderer = GetComponent<MeshRenderer>();
+    }
 }

@@ -35,6 +35,12 @@ public class AttackerTeamManager : TeamManager
 
     private void ChooseTargetSite()
     {
+        if (MapManager.Instance.SiteZones.Count == 0)
+        {
+            Debug.LogWarning("AttackerTeamManager: отсутствуют Site-зоны.");
+            return;
+        }
+
         if (!targetSite)
         {
             // Выбираем случайную SiteVolume
@@ -44,22 +50,25 @@ public class AttackerTeamManager : TeamManager
             foreach (var bot in Bots)
             {
                 if (bot.Role == BotRole.Attacker)
-                    bot.MoveToZone(MapManager.Instance.RoadZones.First(zone => zone.roadToSite == targetSite && zone.roadType == RoadType.Main));
+                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Main) ?? targetSite);
 
                 if (bot.Role == BotRole.Flanker)
-                    bot.MoveToZone(MapManager.Instance.RoadZones.First(zone => zone.roadToSite == targetSite && zone.roadType == RoadType.Link));
+                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Link) ?? targetSite);
 
                 if (bot.Role == BotRole.Scout)
                 {
                     var chanceToGoToNeutral = Random.Range(0, 2);
                     if (chanceToGoToNeutral == 0)
                     {
-                        bot.MoveToZone(MapManager.Instance.RoadZones[Random.Range(0, MapManager.Instance.RoadZones.Count)]);
+                        var roadZones = MapManager.Instance.RoadZones;
+                        if (roadZones.Count > 0)
+                            bot.MoveToZone(roadZones[Random.Range(0, roadZones.Count)]);
                     }
                     else
                     {
-                        bot.MoveToZone(
-                            MapManager.Instance.NeutralZones[Random.Range(0, MapManager.Instance.NeutralZones.Count)]);
+                        var neutralZones = MapManager.Instance.NeutralZones;
+                        if (neutralZones.Count > 0)
+                            bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
                     }
                 }
             }
@@ -70,11 +79,16 @@ public class AttackerTeamManager : TeamManager
         {
             // Выбираем следующую SiteVolume
             var index = MapManager.Instance.SiteZones.IndexOf(targetSite);
+            if (index < 0)
+                index = 0;
+
             targetSite = MapManager.Instance.SiteZones[(index + 1) % MapManager.Instance.SiteZones.Count];
             
             foreach (var bot in Bots)
             {
-                bot.MoveToZone(MapManager.Instance.NeutralZones[Random.Range(0, MapManager.Instance.NeutralZones.Count)]);
+                var neutralZones = MapManager.Instance.NeutralZones;
+                if (neutralZones.Count > 0)
+                    bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
             }
             
             OtherTeam.NotifyDefendersAboutRotate(targetSite);
@@ -96,12 +110,26 @@ public class AttackerTeamManager : TeamManager
     
     private void CheckOnPosition()
     {
-        if (_isMovingToSite || !Bots.All(bot => bot.IsOnPosition)) return;
+        if (_isMovingToSite || targetSite == null || !Bots.All(bot => bot.IsOnPosition)) return;
         _isMovingToSite = true;
         foreach (var bot in Bots)
         {
             if (bot.Role is BotRole.Attacker or BotRole.Flanker)
                 bot.MoveToZone(targetSite);
         }
+    }
+
+    private MapZoneComponent FindPreferredRoad(SiteZoneComponent site, RoadType preferredType)
+    {
+        var roadZones = MapManager.Instance.RoadZones;
+        var exact = roadZones.FirstOrDefault(zone => zone.roadToSite == site && zone.roadType == preferredType);
+        if (exact != null)
+            return exact;
+
+        var sameSiteFallback = roadZones.FirstOrDefault(zone => zone.roadToSite == site);
+        if (sameSiteFallback != null)
+            return sameSiteFallback;
+
+        return roadZones.Count > 0 ? roadZones[Random.Range(0, roadZones.Count)] : null;
     }
 }
