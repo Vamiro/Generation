@@ -32,11 +32,11 @@ public class BlockData
     public BlockType Current => currentType;
 
     // Метод для установки нового типа с учётом приоритета:
-    // Если блок уже Spawn или Site, то не разрешается менять на Main, Link или Road.
+    // Если блок уже Spawn, Site или Neutral, то не разрешается менять на Main, Link или Road.
     public void Set(BlockType newType)
     {
-        // Если текущий тип – Spawn или Site, запрещаем смену на Main, Link или Road
-        if ((currentType == BlockType.Spawn || currentType == BlockType.Site) &&
+        // Если текущий тип – Spawn/Site/Neutral, запрещаем смену на Main, Link или Road
+        if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
             (newType == BlockType.Main || newType == BlockType.Link || newType == BlockType.Road))
         {
             return;
