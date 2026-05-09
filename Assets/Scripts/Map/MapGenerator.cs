@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 using Random = UnityEngine.Random;
 #if UNITY_EDITOR
 using UnityEditor;
@@ -10,113 +11,112 @@ using UnityEditor;
 public partial class MapGenerator : MonoBehaviour
 {
     [Header("Размер карты")]
-    [SerializeField] private int width = 20;    // Количество блоков по X
-    [SerializeField] private int height = 20;   // Количество блоков по Z
+    [SerializeField] private int width = 20; // Ширина карты в клетках по оси X.
+    [SerializeField] private int height = 20; // Высота карты в клетках по оси Z.
 
     [Header("Параметры блока")]
-    [SerializeField, Min(0.01f)] private float blockSize = 1f; // Если увеличить, позиции масштабируются
+    [SerializeField, Min(0.01f)] private float blockSize = 1f; // Размер одной клетки в мировых координатах.
 
     [Header("Настройки зон")]
-    [SerializeField] private int spawnZoneSizeMin = 8;   // Мин. размер зоны спавна
-    [SerializeField] private int spawnZoneSizeMax = 10;    // Макс. размер зоны спавна
-    [SerializeField] private int siteZoneWidth = 4;        // Ширина зоны сайта
-    [SerializeField] private int siteZoneHeight = 4;       // Высота зоны сайта
+    [SerializeField] private int spawnZoneSizeMin = 8; // Минимальный размер зоны спавна.
+    [SerializeField] private int spawnZoneSizeMax = 10; // Максимальный размер зоны спавна.
+    [SerializeField] private int siteZoneWidth = 4; // Ширина зоны сайта.
+    [SerializeField] private int siteZoneHeight = 4; // Высота зоны сайта.
 
     [Header("Позиционирование зон")]
-    [SerializeField, Min(0)] private int innerPadding = 4;
-    [SerializeField, Range(0.05f, 0.5f)] private float spawnBandRatio = 0.25f;
-    [SerializeField, Range(0f, 0.5f)] private float horizontalJitterRatio = 0.1f;
-    [SerializeField, Range(0.1f, 0.9f)] private float siteDepthRatio = 0.33f;
-    [SerializeField, Min(0)] private int spawnOffset = 2;
-    [SerializeField, Min(0)] private int spawnHorizontalOffset = 3;
-    [SerializeField, Min(1)] private int siteDistanceFromSpawnMin = 6;
-    [SerializeField, Min(1)] private int siteDistanceFromSpawnMax = 64;
-    [SerializeField, Min(0)] private int siteFairnessTolerance = 5;
-    [SerializeField, Min(1)] private int sitePlacementAttempts = 30;
-    [SerializeField, Min(1)] private int siteEntryMin = 2;
-    [SerializeField, Min(0)] private int sitePairDistanceMin = 4;
-
-    [Header("Поведение путей")]
-    [SerializeField, Range(0f, 1f)] private float mainPathHorizontalChance = 0.85f;
-    [SerializeField, Range(0f, 1f)] private float linkPathHorizontalChance = 0.15f;
-    [SerializeField, Range(1, 2)] private int linkConnectionCount = 2;
-    [SerializeField] private bool preferShortestConnections = true;
-    [SerializeField] private bool useFixedSeed;
-    [SerializeField] private int generationSeed = 42;
-    [SerializeField, ReadOnlyInInspector] private int currentGenerationSeed;
-    [SerializeField] private bool spawnAIsDefender = true;
-    [SerializeField, Min(0)] private int mainWidth = 1;      // Толщина основных путей
-    [SerializeField, Min(0)] private int linkWidth = 1;      // Толщина фланговых путей
-    [SerializeField, Min(0)] private int roadWidthRandomDelta = 1;
-
-    [Header("Детализация дорог")]
-    [SerializeField] private bool addStraightRoadIndentations = true;
-    [SerializeField, Min(3)] private int straightRoadIndentMinLength = 8;
-    [SerializeField, Min(2)] private int straightRoadIndentInterval = 4;
-    [SerializeField, Min(1)] private int straightRoadIndentDepth = 1;
-    [SerializeField, Range(0f, 1f)] private float straightRoadIndentChance = 0.65f;
+    [SerializeField, Min(0)] private int innerPadding = 4; // Внутренний отступ от границы карты для размещения зон.
+    [SerializeField, Range(0.05f, 0.5f)] private float spawnBandRatio = 0.25f; // Доля высоты карты для полос размещения спавнов.
+    [SerializeField, Range(0f, 0.5f)] private float horizontalJitterRatio = 0.1f; // Доля ширины, задающая случайный сдвиг зон по X.
+    [SerializeField, Range(0.1f, 0.9f)] private float siteDepthRatio = 0.33f; // Относительная глубина размещения сайтов от края.
+    [SerializeField, Min(0)] private int spawnOffset = 2; // Радиус случайного смещения старта link от центра спавна.
+    [SerializeField, Min(0)] private int spawnHorizontalOffset = 3; // Максимальный сдвиг спавна B относительно спавна A по X.
+    [SerializeField, Min(1)] private int siteDistanceFromSpawnMin = 6; // Минимальная дистанция от спавна до сайта.
+    [SerializeField, Min(1)] private int siteDistanceFromSpawnMax = 64; // Максимальная дистанция от спавна до сайта.
+    [SerializeField, Min(0)] private int siteFairnessTolerance = 5; // Допустимая разница дистанций до сайта для fairness.
+    [SerializeField, Min(1)] private int sitePlacementAttempts = 30; // Количество попыток подобрать валидные позиции сайтов.
+    [SerializeField, Min(1)] private int siteEntryMin = 2; // Минимум внешних входов в зону сайта.
+    [SerializeField, Min(0)] private int sitePairDistanceMin = 4; // Минимальная дистанция между центрами сайтов.
 
     [Header("Маршруты link")]
-    [SerializeField] private bool routeLinkViaRoom = true;
-    [SerializeField, Range(0f, 1f)] private float linkViaRoomChance = 1f;
-    [SerializeField, Min(0)] private int linkRoomExitOffset = 1;
-    [SerializeField, Range(0f, 1f)] private float linkHubBlendToCenter = 0.5f;
-    [SerializeField] private bool linkCanMergeIntoMain = true;
-    [SerializeField, Range(0f, 5f)] private float astarLinkMergeMainPenalty = 0.25f;
+    [SerializeField, Range(1, 2)] private int linkConnectionCount = 2; // Базовое число link-маршрутов до fallback-покрытия сайтов.
+    [SerializeField] private bool preferShortestConnections = true; // Приоритет более коротких link-маршрутов.
+    [SerializeField] private bool spawnAIsDefender = true; // Назначить спавн A стороной defender.
+    [FormerlySerializedAs("routeLinkViaRoom")]
+    [SerializeField] private bool routeLinkViaNeutral = true; // Разрешить прокладку link через нейтральную зону.
+    [FormerlySerializedAs("linkViaRoomChance")]
+    [SerializeField, Range(0f, 1f)] private float linkViaNeutralChance = 1f; // Вероятность маршрутизации link через нейтральную зону.
+    [FormerlySerializedAs("linkRoomExitOffset")]
+    [SerializeField, Min(0)] private int linkNeutralExitOffset = 1; // Смещение точки выхода link из нейтральной зоны/хаба.
+    [SerializeField, Range(0f, 1f)] private float linkHubBlendToCenter = 0.5f; // Насколько hub link тянется к центру карты.
+
+    [Header("Геометрия дорог")]
+    [SerializeField, Min(0)] private int mainWidth = 1; // Базовая толщина основных путей.
+    [SerializeField, Min(0)] private int linkWidth = 1; // Базовая толщина фланговых путей.
+    [SerializeField, Min(0)] private int roadWidthRandomDelta = 1; // Случайный разброс толщины дороги вокруг базовой.
+    [SerializeField] private bool useCircularPathBrush = false; // Использовать круговую кисть при расширении толщины дороги.
+
+    [Header("Сид генерации")]
+    [SerializeField] private bool useFixedSeed; // Использовать фиксированный seed вместо случайного.
+    [SerializeField] private int generationSeed = 42; // Seed генерации, если включен фиксированный seed.
+    [SerializeField, ReadOnlyInInspector] private int currentGenerationSeed; // Seed, примененный в текущей генерации.
 
     [Header("A*")]
-    [SerializeField, Range(0f, 5f)] private float astarTurnPenalty = 0.35f;
-    [SerializeField, Range(0f, 10f)] private float astarRoadReusePenalty = 1.5f;
-    [SerializeField, Range(0f, 10f)] private float astarLinkAvoidMainPenalty = 2f;
-    [SerializeField, Range(0f, 10f)] private float astarMainAvoidLinkPenalty = 1f;
-    [SerializeField, Range(0f, 5f)] private float astarBorderPenalty = 1.5f;
-    [SerializeField, Range(0f, 5f)] private float astarLinkCenterPenalty = 1f;
-    [SerializeField] private bool astarAllowDiagonalMoves = false;
-    [SerializeField, Range(0f, 5f)] private float astarDiagonalPenalty = 1.25f;
-    [SerializeField, Range(0f, 2f)] private float astarRandomJitter = 0.05f;
-    [SerializeField] private bool useCircularPathBrush = false;
-    [SerializeField] private bool useFallbackPathWhenAstarFails = true;
+    [FormerlySerializedAs("mainPathHorizontalChance")]
+    [SerializeField, Range(0f, 1f)] private float astarMainHorizontalBias = 0.85f; // Приоритет горизонтального движения для main-пути при равных узлах.
+    [FormerlySerializedAs("linkPathHorizontalChance")]
+    [SerializeField, Range(0f, 1f)] private float astarLinkHorizontalBias = 0.15f; // Приоритет горизонтального движения для link-пути при равных узлах.
+    [SerializeField, Range(0f, 5f)] private float astarTurnPenalty = 0.35f; // Штраф за поворот маршрута.
+    [SerializeField, Range(0f, 10f)] private float astarRoadReusePenalty = 1.5f; // Штраф за повторное использование уже занятых дорог.
+    [SerializeField, Range(0f, 10f)] private float astarLinkAvoidMainPenalty = 2f; // Дополнительный штраф link за движение по main.
+    [SerializeField, Range(0f, 10f)] private float astarMainAvoidLinkPenalty = 1f; // Дополнительный штраф main за движение по link.
+    [SerializeField, Range(0f, 5f)] private float astarBorderPenalty = 1.5f; // Штраф за прохождение близко к границам карты.
+    [SerializeField, Range(0f, 5f)] private float astarLinkCenterPenalty = 1f; // Штраф link за прохождение через центральную область.
+    [SerializeField] private bool astarAllowDiagonalMoves = false; // Разрешить диагональные шаги в A*.
+    [SerializeField, Range(0f, 5f)] private float astarDiagonalPenalty = 1.25f; // Стоимость диагонального шага относительно прямого.
+    [SerializeField, Range(0f, 2f)] private float astarRandomJitter = 0.05f; // Случайный шум стоимости пути для вариативности.
+    [SerializeField] private bool linkCanMergeIntoMain = true; // Разрешить link использовать клетки main в A*.
+    [SerializeField, Range(0f, 5f)] private float astarLinkMergeMainPenalty = 0.25f; // Штраф A* за слияние link в main.
+    [SerializeField] private bool useFallbackPathWhenAstarFails = true; // Строить fallback-путь, если A* не нашел маршрут.
 
-    [Header("Комната")]
-    [SerializeField] private bool generateRoomZone = true;
-    [SerializeField] private Vector2Int roomSize = new Vector2Int(5, 5);
-    [SerializeField, Min(0)] private int roomGrowthSteps = 24;
-    [SerializeField, Range(0f, 1f)] private float roomGrowthBaseChance = 0.35f;
-    [SerializeField, Range(0f, 2f)] private float roomGrowthDistanceFactor = 0.45f;
-    [SerializeField, Range(0f, 1f)] private float roomEmptyPenaltyFactor = 0.08f;
-    [SerializeField, Min(0)] private int roomAntiMergeContactThreshold = 1;
+    [Header("Нейтральная зона")]
+    [FormerlySerializedAs("generateRoomZone")]
+    [SerializeField] private bool generateNeutralZone = true; // Генерировать фиксированную нейтральную зону.
+    [FormerlySerializedAs("roomSize")]
+    [SerializeField] private Vector2Int neutralZoneSize = new Vector2Int(5, 5); // Размер нейтральной зоны.
 
     [Header("Префабы")]
-    [SerializeField] private BlockComponent floorPrefab;
-    [SerializeField] private BlockComponent wallPrefab;
-    [SerializeField] private GameObject coverPrefab; // Префаб укрытия
+    [SerializeField] private BlockComponent floorPrefab; // Префаб базовой клетки пола.
+    [SerializeField] private BlockComponent wallPrefab; // Префаб клетки стены.
+    [SerializeField] private GameObject coverPrefab; // Префаб объекта укрытия.
 
     [Header("Материалы")]
-    [SerializeField] private Material spawnMaterial;
-    [SerializeField] private Material roadMaterial;
-    [SerializeField] private Material siteMaterial;
-    [SerializeField] private Material mainMaterial;
-    [SerializeField] private Material linkMaterial;
-    [SerializeField] private Material floorMaterial;
-    [SerializeField] private Material wallMaterial;
-    [SerializeField] private Material roomMaterial; // Материал для комнаты
+    [SerializeField] private Material spawnMaterial; // Материал для зоны спавна.
+    [SerializeField] private Material roadMaterial; // Резервный материал для дорожных зон.
+    [SerializeField] private Material siteMaterial; // Материал для зоны сайта.
+    [SerializeField] private Material mainMaterial; // Материал для main-дорог.
+    [SerializeField] private Material linkMaterial; // Материал для link-дорог.
+    [SerializeField] private Material floorMaterial; // Материал для обычного пола.
+    [SerializeField] private Material wallMaterial; // Материал для стен.
+    [FormerlySerializedAs("roomMaterial")]
+    [SerializeField] private Material neutralMaterial; // Материал для нейтральной зоны.
 
     [Header("Настройки укрытий")]
-    [SerializeField] private float coverSpawnMultiplier = 1f; // Общий множитель вероятности
-    // Для каждой зоны можно задать минимальную и максимальную вероятность спавна укрытия:
-    [SerializeField] private float coverMinProbabilitySpawn = 0.3f;
-    [SerializeField] private float coverMaxProbabilitySpawn = 0.6f;
-    [SerializeField] private float coverMinProbabilitySite  = 0.2f;
-    [SerializeField] private float coverMaxProbabilitySite  = 0.5f;
-    [SerializeField] private float coverMinProbabilityMain  = 0.1f; // На центральной части дороги вероятность мала
-    [SerializeField] private float coverMaxProbabilityMain  = 0.8f; // На краях – высокая
-    [SerializeField] private float coverMinProbabilityLink  = 0.1f;
-    [SerializeField] private float coverMaxProbabilityLink  = 0.8f;
-    [SerializeField] private float coverMinProbabilityRoom  = 0.5f;
-    [SerializeField] private float coverMaxProbabilityRoom  = 0.7f;
-    [SerializeField, Min(1)] private int narrowCorridorWidthThreshold = 2;
-    [SerializeField, Range(0.5f, 2f)] private float narrowCorridorCoverMultiplier = 1.3f;
-    [SerializeField, Range(0.5f, 2f)] private float openAreaCoverMultiplier = 1.15f;
+    [SerializeField] private float coverSpawnMultiplier = 1f; // Общий множитель вероятности появления укрытий.
+    [SerializeField] private float coverMinProbabilitySpawn = 0.3f; // Минимальная вероятность укрытия в spawn-зоне.
+    [SerializeField] private float coverMaxProbabilitySpawn = 0.6f; // Максимальная вероятность укрытия в spawn-зоне.
+    [SerializeField] private float coverMinProbabilitySite  = 0.2f; // Минимальная вероятность укрытия в site-зоне.
+    [SerializeField] private float coverMaxProbabilitySite  = 0.5f; // Максимальная вероятность укрытия в site-зоне.
+    [SerializeField] private float coverMinProbabilityMain  = 0.1f; // Минимальная вероятность укрытия в main-зоне.
+    [SerializeField] private float coverMaxProbabilityMain  = 0.8f; // Максимальная вероятность укрытия в main-зоне.
+    [SerializeField] private float coverMinProbabilityLink  = 0.1f; // Минимальная вероятность укрытия в link-зоне.
+    [SerializeField] private float coverMaxProbabilityLink  = 0.8f; // Максимальная вероятность укрытия в link-зоне.
+    [FormerlySerializedAs("coverMinProbabilityRoom")]
+    [SerializeField] private float coverMinProbabilityNeutral  = 0.5f; // Минимальная вероятность укрытия в neutral-зоне.
+    [FormerlySerializedAs("coverMaxProbabilityRoom")]
+    [SerializeField] private float coverMaxProbabilityNeutral  = 0.7f; // Максимальная вероятность укрытия в neutral-зоне.
+    [SerializeField, Min(1)] private int narrowCorridorWidthThreshold = 2; // Порог ширины, ниже которого проход считается узким.
+    [SerializeField, Range(0.5f, 2f)] private float narrowCorridorCoverMultiplier = 1.3f; // Множитель вероятности укрытий в узких коридорах.
+    [SerializeField, Range(0.5f, 2f)] private float openAreaCoverMultiplier = 1.15f; // Множитель вероятности укрытий на открытых участках.
 
     private BlockComponent[,] mapGrid;
     private Vector2Int spawnA, spawnB;
@@ -131,7 +131,7 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Site,
         BlockType.Main,
         BlockType.Link,
-        BlockType.Room
+        BlockType.Neutral
     };
 
     private static readonly BlockType[] CoverZones =
@@ -140,7 +140,7 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Site,
         BlockType.Main,
         BlockType.Link,
-        BlockType.Room
+        BlockType.Neutral
     };
 
     private static readonly BlockType[] RuntimeZoneTypes =
@@ -148,7 +148,8 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Spawn,
         BlockType.Site,
         BlockType.Main,
-        BlockType.Link
+        BlockType.Link,
+        BlockType.Neutral
     };
 
     private int nextZoneId;
@@ -206,7 +207,7 @@ public partial class MapGenerator : MonoBehaviour
         InitializeZoneCollections();
         CreateFloorGrid();
 
-        // Разметка зон (Спавны, Сайты, Main, Link, Комната)
+        // Разметка зон (Спавны, Сайты, Main, Link, Neutral)
         MarkZones();
 
         // Заполняем границы карты стенами
@@ -302,10 +303,8 @@ public partial class MapGenerator : MonoBehaviour
         LayoutSettings layout = BuildLayoutSettings();
         PlaceSpawnZones(layout);
         PlaceSiteZones(layout);
-        MarkRoomZone();
+        MarkNeutralZone();
         BuildStructuredRoutes();
-
-        GrowRoomZones();
     }
 
     LayoutSettings BuildLayoutSettings()
@@ -351,8 +350,8 @@ public partial class MapGenerator : MonoBehaviour
                 return siteMaterial;
             case BlockType.Road:
                 return roadMaterial;
-            case BlockType.Room:
-                return roomMaterial;
+            case BlockType.Neutral:
+                return neutralMaterial;
             default:
                 return null;
         }

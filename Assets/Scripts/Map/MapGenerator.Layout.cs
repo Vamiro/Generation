@@ -142,18 +142,44 @@ public partial class MapGenerator
             Shuffle(linkPlans);
         }
 
+        HashSet<Vector2Int> linkedSites = new();
         for (int i = 0; i < linksToBuild; i++)
         {
             TeamRoutePlan plan = linkPlans[i];
             Vector2Int oppositeSpawn = plan.Spawn == defenderSpawn ? attackerSpawn : defenderSpawn;
             CreateTeamLinkConnection(plan, oppositeSpawn);
+            linkedSites.Add(plan.LinkSite);
         }
+
+        EnsureLinksToAllSites(linkedSites, defenderSpawn, attackerSpawn);
 
         // У каждого спавна всегда есть main в оба сайта.
         CreateMainConnection(defenderSpawn, siteA);
         CreateMainConnection(defenderSpawn, siteB);
         CreateMainConnection(attackerSpawn, siteA);
         CreateMainConnection(attackerSpawn, siteB);
+    }
+
+    void EnsureLinksToAllSites(HashSet<Vector2Int> linkedSites, Vector2Int defenderSpawn, Vector2Int attackerSpawn)
+    {
+        Vector2Int[] siteOrigins = { siteA, siteB };
+        foreach (Vector2Int siteOrigin in siteOrigins)
+        {
+            if (linkedSites.Contains(siteOrigin))
+                continue;
+
+            Vector2Int preferredSpawn = GetPreferredSpawnForSite(siteOrigin, defenderSpawn, attackerSpawn);
+            Vector2Int oppositeSpawn = preferredSpawn == defenderSpawn ? attackerSpawn : defenderSpawn;
+            CreateTeamLinkConnection(new TeamRoutePlan(preferredSpawn, siteOrigin), oppositeSpawn);
+        }
+    }
+
+    Vector2Int GetPreferredSpawnForSite(Vector2Int siteOrigin, Vector2Int defenderSpawn, Vector2Int attackerSpawn)
+    {
+        Vector2Int siteCenter = GetSiteCenter(siteOrigin);
+        int defenderDistance = ManhattanDistance(defenderSpawn, siteCenter);
+        int attackerDistance = ManhattanDistance(attackerSpawn, siteCenter);
+        return defenderDistance <= attackerDistance ? defenderSpawn : attackerSpawn;
     }
 
     TeamRoutePlan BuildTeamRoutePlan(Vector2Int spawnPoint)
@@ -169,73 +195,22 @@ public partial class MapGenerator
         return distToA >= distToB ? siteA : siteB;
     }
 
-    void MarkRoomZone()
+    void MarkNeutralZone()
     {
-        if (!generateRoomZone)
+        if (!generateNeutralZone)
             return;
 
         int midX = (spawnA.x + spawnB.x + siteA.x + siteB.x) / 4;
         int midZ = (spawnA.y + spawnB.y + siteA.y + siteB.y) / 4;
-        int sizeX = Mathf.Max(1, roomSize.x);
-        int sizeZ = Mathf.Max(1, roomSize.y);
-        ClearZone(midX - sizeX / 2, midZ - sizeZ / 2, sizeX, sizeZ, BlockType.Room);
-    }
-
-    void GrowRoomZones()
-    {
-        if (!generateRoomZone || roomGrowthSteps <= 0)
-            return;
-
-        List<Vector2Int> growthFront = new();
-        AppendZoneCellsToFront(BlockType.Room, growthFront);
-        AppendZoneCellsToFront(BlockType.Main, growthFront);
-        AppendZoneCellsToFront(BlockType.Link, growthFront);
-        if (growthFront.Count == 0)
-            return;
-
-        for (int step = 0; step < roomGrowthSteps; step++)
-        {
-            Vector2Int seed = growthFront[Random.Range(0, growthFront.Count)];
-            Vector2Int candidate = seed + RandomDirection4();
-            if (!IsInsideMap(candidate.x, candidate.y) || IsBorder(candidate.x, candidate.y))
-                continue;
-
-            if (mapGrid[candidate.x, candidate.y].blockType.Current != BlockType.Floor)
-                continue;
-
-            int contactCount = CountNonFloorContacts(candidate.x, candidate.y);
-            if (contactCount > roomAntiMergeContactThreshold)
-                continue;
-
-            float normalizedDistance = Vector2Int.Distance(candidate, seed) / Mathf.Max(1f, Mathf.Max(width, height));
-            float chance = roomGrowthBaseChance + normalizedDistance * roomGrowthDistanceFactor;
-            chance -= CountNeighborType(candidate.x, candidate.y, BlockType.Floor) * roomEmptyPenaltyFactor;
-            chance = Mathf.Clamp01(chance);
-            if (Random.value > chance)
-                continue;
-
-            if (TryMarkBlock(candidate.x, candidate.y, BlockType.Room))
-                growthFront.Add(candidate);
-        }
-    }
-
-    void AppendZoneCellsToFront(BlockType zoneType, List<Vector2Int> front)
-    {
-        if (!zoneBlocks.TryGetValue(zoneType, out HashSet<BlockComponent> blocks))
-            return;
-
-        foreach (BlockComponent block in blocks)
-        {
-            int gridX = Mathf.RoundToInt(block.transform.position.x / blockSize);
-            int gridZ = Mathf.RoundToInt(block.transform.position.z / blockSize);
-            front.Add(new Vector2Int(gridX, gridZ));
-        }
+        int sizeX = Mathf.Max(1, neutralZoneSize.x);
+        int sizeZ = Mathf.Max(1, neutralZoneSize.y);
+        ClearZone(midX - sizeX / 2, midZ - sizeZ / 2, sizeX, sizeZ, BlockType.Neutral);
     }
 
     void CreateMainConnection(Vector2Int spawnPoint, Vector2Int sitePoint)
     {
         Vector2Int endpoint = GetClosestEdgePoint(sitePoint, siteZoneWidth, siteZoneHeight, spawnPoint);
-        CreatePath(spawnPoint, endpoint, BlockType.Main, mainWidth, mainPathHorizontalChance, true);
+        CreatePath(spawnPoint, endpoint, BlockType.Main, mainWidth, astarMainHorizontalBias, true);
     }
 
     void CreateTeamLinkConnection(TeamRoutePlan plan, Vector2Int oppositeSpawn)
@@ -246,12 +221,12 @@ public partial class MapGenerator
 
         if (hub == start)
         {
-            CreatePath(start, endpoint, BlockType.Link, linkWidth, linkPathHorizontalChance, false);
+            CreatePath(start, endpoint, BlockType.Link, linkWidth, astarLinkHorizontalBias, false);
             return;
         }
 
-        CreatePath(start, hub, BlockType.Link, linkWidth, linkPathHorizontalChance, false);
-        CreatePath(hub, endpoint, BlockType.Link, linkWidth, linkPathHorizontalChance, false);
+        CreatePath(start, hub, BlockType.Link, linkWidth, astarLinkHorizontalBias, false);
+        CreatePath(hub, endpoint, BlockType.Link, linkWidth, astarLinkHorizontalBias, false);
     }
 
     Vector2Int ResolveLinkHub(Vector2Int spawnPoint, Vector2Int oppositeSpawn)
@@ -262,15 +237,15 @@ public partial class MapGenerator
             (spawnPoint.y + oppositeSpawn.y) / 2);
         Vector2Int hub = Vector2Int.RoundToInt(Vector2.Lerp((Vector2)laneMid, (Vector2)mapCenter, linkHubBlendToCenter));
 
-        bool shouldRouteViaRoom = routeLinkViaRoom && Random.value <= linkViaRoomChance;
-        if (shouldRouteViaRoom && TryGetRoomHubPoint(out Vector2Int roomHub))
-            hub = Vector2Int.RoundToInt(Vector2.Lerp((Vector2)hub, (Vector2)roomHub, 0.75f));
+        bool shouldRouteViaNeutral = routeLinkViaNeutral && Random.value <= linkViaNeutralChance;
+        if (shouldRouteViaNeutral && TryGetNeutralHubPoint(out Vector2Int neutralHub))
+            hub = Vector2Int.RoundToInt(Vector2.Lerp((Vector2)hub, (Vector2)neutralHub, 0.75f));
 
         Vector2Int sideDirection = new Vector2Int(
             Mathf.Clamp(spawnPoint.x - oppositeSpawn.x, -1, 1),
             Mathf.Clamp(spawnPoint.y - oppositeSpawn.y, -1, 1));
-        if (sideDirection != Vector2Int.zero && linkRoomExitOffset > 0)
-            hub += sideDirection * linkRoomExitOffset;
+        if (sideDirection != Vector2Int.zero && linkNeutralExitOffset > 0)
+            hub += sideDirection * linkNeutralExitOffset;
 
         hub = new Vector2Int(ClampGridX(hub.x), ClampGridZ(hub.y));
         if (CanTraverseForPath(hub.x, hub.y))
@@ -305,11 +280,11 @@ public partial class MapGenerator
         return fallback;
     }
 
-    bool TryGetRoomHubPoint(out Vector2Int waypoint)
+    bool TryGetNeutralHubPoint(out Vector2Int waypoint)
     {
         waypoint = default;
-        if (!zoneBlocks.TryGetValue(BlockType.Room, out HashSet<BlockComponent> roomBlocks) ||
-            roomBlocks.Count == 0)
+        if (!zoneBlocks.TryGetValue(BlockType.Neutral, out HashSet<BlockComponent> neutralBlocks) ||
+            neutralBlocks.Count == 0)
             return false;
 
         Vector2Int referenceCenter = new Vector2Int(
@@ -318,7 +293,7 @@ public partial class MapGenerator
 
         float bestScore = float.PositiveInfinity;
         bool found = false;
-        foreach (BlockComponent block in roomBlocks)
+        foreach (BlockComponent block in neutralBlocks)
         {
             int x = Mathf.RoundToInt(block.transform.position.x / blockSize);
             int z = Mathf.RoundToInt(block.transform.position.z / blockSize);
@@ -473,57 +448,4 @@ public partial class MapGenerator
         }
     }
 
-    Vector2Int RandomDirection4()
-    {
-        return Random.Range(0, 4) switch
-        {
-            0 => Vector2Int.right,
-            1 => Vector2Int.left,
-            2 => Vector2Int.up,
-            _ => Vector2Int.down
-        };
-    }
-
-    int CountNeighborType(int gridX, int gridZ, BlockType blockType)
-    {
-        int count = 0;
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                if (dx == 0 && dz == 0)
-                    continue;
-
-                int nx = gridX + dx;
-                int nz = gridZ + dz;
-                if (!IsInsideMap(nx, nz))
-                    continue;
-
-                if (mapGrid[nx, nz].blockType.Current == blockType)
-                    count++;
-            }
-        }
-
-        return count;
-    }
-
-    int CountNonFloorContacts(int gridX, int gridZ)
-    {
-        int count = 0;
-        int[] dx = { 0, 1, 0, -1 };
-        int[] dz = { 1, 0, -1, 0 };
-        for (int i = 0; i < 4; i++)
-        {
-            int nx = gridX + dx[i];
-            int nz = gridZ + dz[i];
-            if (!IsInsideMap(nx, nz))
-                continue;
-
-            BlockType type = mapGrid[nx, nz].blockType.Current;
-            if (type != BlockType.Floor && type != BlockType.Wall && type != BlockType.Room)
-                count++;
-        }
-
-        return count;
-    }
 }

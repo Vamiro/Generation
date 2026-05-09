@@ -340,8 +340,6 @@ MonoBehaviour:
   width: 100
   height: 100
   blockSize: 2
-  mainWidth: 2
-  linkWidth: 2
   spawnZoneSizeMin: 10
   spawnZoneSizeMax: 14
   siteZoneWidth: 6
@@ -360,16 +358,23 @@ MonoBehaviour:
   sitePairDistanceMin: 4
   mainPathHorizontalChance: 0.85
   linkPathHorizontalChance: 0.15
-  mainConnectionCount: 2
   linkConnectionCount: 2
   preferShortestConnections: 1
-  enforceSiteCoverage: 1
   useFixedSeed: 1
-  generationSeed: 44
+  generationSeed: 489076278
+  currentGenerationSeed: 489076278
   spawnAIsDefender: 1
-  routeLinkViaRoom: 1
-  linkViaRoomChance: 1
-  linkRoomExitOffset: 1
+  mainWidth: 2
+  linkWidth: 1
+  roadWidthRandomDelta: 0
+  addStraightRoadIndentations: 1
+  straightRoadIndentMinLength: 8
+  straightRoadIndentInterval: 4
+  straightRoadIndentDepth: 1
+  straightRoadIndentChance: 0.65
+  routeLinkViaRoom: 0
+  linkViaRoomChance: 0.881
+  linkRoomExitOffset: 4
   linkHubBlendToCenter: 0.5
   linkCanMergeIntoMain: 1
   astarLinkMergeMainPenalty: 0.25

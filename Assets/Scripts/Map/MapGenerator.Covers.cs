@@ -97,8 +97,8 @@ public partial class MapGenerator
                 probability = Mathf.Lerp(coverMaxProbabilitySite, coverMinProbabilitySite, density) *
                               GetOpenAreaModifier(density);
                 return true;
-            case BlockType.Room:
-                probability = Mathf.Lerp(coverMaxProbabilityRoom, coverMinProbabilityRoom, density) *
+            case BlockType.Neutral:
+                probability = Mathf.Lerp(coverMaxProbabilityNeutral, coverMinProbabilityNeutral, density) *
                               GetOpenAreaModifier(density);
                 return true;
             default:

@@ -26,37 +26,12 @@ public partial class MapGenerator
 
         int randomizedPathWidth = ResolvePathWidth(pathWidth, start, end, blockType);
         int weight = 1;
-        Vector2Int straightDirection = Vector2Int.zero;
-        int straightLength = 0;
         for (int i = 0; i < path.Count; i++)
         {
             Vector2Int cell = path[i];
             int localWidth = randomizedPathWidth;
             int? paintedWeight = writeWeight ? (int?)weight : null;
             PaintPathBrush(cell.x, cell.y, localWidth, blockType, paintedWeight);
-
-            if (i > 0)
-            {
-                Vector2Int step = path[i] - path[i - 1];
-                Vector2Int stepDir = new Vector2Int(Mathf.Clamp(step.x, -1, 1), Mathf.Clamp(step.y, -1, 1));
-                if (stepDir == straightDirection)
-                {
-                    straightLength++;
-                }
-                else
-                {
-                    straightDirection = stepDir;
-                    straightLength = 1;
-                }
-
-                TryPaintStraightRoadIndent(
-                    cell,
-                    straightDirection,
-                    straightLength,
-                    localWidth,
-                    blockType,
-                    paintedWeight);
-            }
 
             if (writeWeight)
                 weight++;
@@ -74,51 +49,6 @@ public partial class MapGenerator
             start.y + end.y * 31 + typeSeed * 3);
         int offset = Mathf.RoundToInt((widthNoise * 2f - 1f) * roadWidthRandomDelta);
         return Mathf.Max(0, baseWidth + offset);
-    }
-
-    void TryPaintStraightRoadIndent(
-        Vector2Int cell,
-        Vector2Int direction,
-        int straightLength,
-        int localWidth,
-        BlockType blockType,
-        int? weight)
-    {
-        if (!addStraightRoadIndentations ||
-            straightLength < straightRoadIndentMinLength ||
-            direction == Vector2Int.zero)
-            return;
-
-        if (direction.x != 0 && direction.y != 0)
-            return;
-
-        int indentInterval = Mathf.Max(2, straightRoadIndentInterval);
-        if ((straightLength - straightRoadIndentMinLength) % indentInterval != 0)
-            return;
-
-        float chanceRoll = GetDeterministicJitter(
-            cell.x + straightLength * 17,
-            cell.y + straightLength * 23);
-        if (chanceRoll > Mathf.Clamp01(straightRoadIndentChance))
-            return;
-
-        Vector2Int perpendicular = new Vector2Int(-direction.y, direction.x);
-        float sideRoll = GetDeterministicJitter(
-            cell.x - straightLength * 19,
-            cell.y + straightLength * 29);
-        if (sideRoll > 0.5f)
-            perpendicular *= -1;
-
-        int depth = Mathf.Max(1, straightRoadIndentDepth);
-        int indentWidth = Mathf.Max(0, localWidth - 1);
-        for (int depthStep = 1; depthStep <= depth; depthStep++)
-        {
-            Vector2Int indentCell = cell + perpendicular * depthStep;
-            if (!IsInsideMap(indentCell.x, indentCell.y) || IsBorder(indentCell.x, indentCell.y))
-                break;
-
-            PaintPathBrush(indentCell.x, indentCell.y, indentWidth, blockType, weight);
-        }
     }
 
     List<Vector2Int> FindPathAStar(Vector2Int start, Vector2Int end, BlockType blockType, float horizontalPreference)
