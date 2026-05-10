@@ -11,11 +11,12 @@ public partial class MapGenerator
         if (!zoneBlocks.TryGetValue(BlockType.Link, out HashSet<BlockComponent> linkBlocks) || linkBlocks.Count == 0)
             Debug.LogWarning("MapGenerator: после генерации отсутствуют Link пути.");
 
+        // Сайт не должен прилегать вплотную к границе карты — иначе вокруг него негде поставить внешнюю стену.
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
             {
-                if (mapGrid[x, z].blockType.Current == BlockType.Site && IsBorder(x, z))
+                if (GetCellType(x, z) == BlockType.Site && IsAtMapEdge(x, z))
                 {
                     Debug.LogWarning($"MapGenerator: сайт попал на границу карты ({x}, {z}).");
                     break;
@@ -94,6 +95,10 @@ public partial class MapGenerator
 
     bool IsWalkableCell(int x, int z)
     {
-        return IsInsideMap(x, z) && mapGrid[x, z].blockType.Current != BlockType.Wall;
+        if (!IsInsideMap(x, z))
+            return false;
+
+        BlockType type = cellTypes[x, z];
+        return type != BlockType.Wall && type != BlockType.Empty;
     }
 }

@@ -2,6 +2,12 @@ using System.Collections.Generic;
 using UnityEngine;
 using Random = UnityEngine.Random;
 
+public enum ZoneShapeMode
+{
+    Square,
+    Brush
+}
+
 public partial class MapGenerator
 {
     void PlaceSpawnZones()
@@ -21,8 +27,8 @@ public partial class MapGenerator
         attackerSpawn = new Vector2Int(attackerX, attackerZ);
         defenderSpawn = new Vector2Int(defenderX, defenderZ);
 
-        MarkRectAround(attackerSpawn, attackerHalf, spawnSizeAttacker - attackerHalf, BlockType.Spawn);
-        MarkRectAround(defenderSpawn, defenderHalf, spawnSizeDefender - defenderHalf, BlockType.Spawn);
+        PaintZoneAroundCenter(attackerSpawn, attackerHalf, spawnSizeAttacker - attackerHalf, BlockType.Spawn);
+        PaintZoneAroundCenter(defenderSpawn, defenderHalf, spawnSizeDefender - defenderHalf, BlockType.Spawn);
     }
 
     int ResolveSpawnCenterX(int spawnSize)
@@ -55,8 +61,8 @@ public partial class MapGenerator
         siteA = ResolveSiteOrigin(leftHalf: true, siteASize, siteLineZ);
         siteB = ResolveSiteOrigin(leftHalf: false, siteBSize, siteLineZ);
 
-        ClearZone(siteA.x, siteA.y, siteASize, siteASize, BlockType.Site);
-        ClearZone(siteB.x, siteB.y, siteBSize, siteBSize, BlockType.Site);
+        PaintZoneByRect(siteA.x, siteA.y, siteASize, siteASize, BlockType.Site);
+        PaintZoneByRect(siteB.x, siteB.y, siteBSize, siteBSize, BlockType.Site);
     }
 
     int ResolveSiteLineZ()
@@ -148,7 +154,7 @@ public partial class MapGenerator
         centerZ = Mathf.Clamp(centerZ, zClampMin, zClampMax);
 
         neutralCenter = new Vector2Int(centerX, centerZ);
-        ClearZone(centerX - halfX, centerZ - halfZ, sizeX, sizeZ, BlockType.Neutral);
+        PaintZoneByRect(centerX - halfX, centerZ - halfZ, sizeX, sizeZ, BlockType.Neutral);
     }
 
     void BuildStructuredRoutes()
@@ -229,26 +235,73 @@ public partial class MapGenerator
         if (!IsInsideMap(cell.x, cell.y))
             return false;
 
-        BlockType type = mapGrid[cell.x, cell.y].blockType.Current;
+        BlockType type = cellTypes[cell.x, cell.y];
         return type == BlockType.Spawn || type == BlockType.Main;
     }
 
-    void ClearZone(int startX, int startZ, int sizeX, int sizeZ, BlockType type)
+    // Заполняет зону по прямоугольнику (startX, startZ, sizeX, sizeZ) с учётом текущего zoneShapeMode.
+    // Square — обычный прямоугольник. Brush — круглая/квадратная кисть из центра.
+    void PaintZoneByRect(int startX, int startZ, int sizeX, int sizeZ, BlockType type)
     {
-        for (int x = startX; x < startX + sizeX; x++)
+        if (sizeX <= 0 || sizeZ <= 0)
+            return;
+
+        float centerX = startX + (sizeX - 1) * 0.5f;
+        float centerZ = startZ + (sizeZ - 1) * 0.5f;
+        float radiusX = Mathf.Max(0.5f, sizeX * 0.5f);
+        float radiusZ = Mathf.Max(0.5f, sizeZ * 0.5f);
+
+        bool useCircular = zoneShapeMode != ZoneShapeMode.Square && useCircularZoneBrush;
+        StampZoneShape(centerX, centerZ, radiusX, radiusZ, useCircular, type);
+    }
+
+    // Один "штамп" зоны: круглой (эллипс) или квадратной формы.
+    void StampZoneShape(
+        float centerX,
+        float centerZ,
+        float radiusX,
+        float radiusZ,
+        bool circular,
+        BlockType type)
+    {
+        int xMin = Mathf.FloorToInt(centerX - radiusX);
+        int xMax = Mathf.CeilToInt(centerX + radiusX);
+        int zMin = Mathf.FloorToInt(centerZ - radiusZ);
+        int zMax = Mathf.CeilToInt(centerZ + radiusZ);
+
+        for (int x = xMin; x <= xMax; x++)
         {
-            for (int z = startZ; z < startZ + sizeZ; z++)
+            for (int z = zMin; z <= zMax; z++)
+            {
+                if (!IsInsideMap(x, z))
+                    continue;
+
+                if (circular)
+                {
+                    float nx = (x - centerX) / radiusX;
+                    float nz = (z - centerZ) / radiusZ;
+                    if (nx * nx + nz * nz > 1f)
+                        continue;
+                }
+                else
+                {
+                    if (Mathf.Abs(x - centerX) > radiusX || Mathf.Abs(z - centerZ) > radiusZ)
+                        continue;
+                }
+
                 TryMarkBlock(x, z, type);
+            }
         }
     }
 
-    void MarkRectAround(Vector2Int center, int halfBefore, int halfAfter, BlockType type)
+    // Заполняет зону вокруг центра, учитывая ассиметрию полу-размеров (как у спавнов).
+    void PaintZoneAroundCenter(Vector2Int center, int halfBefore, int halfAfter, BlockType type)
     {
         int sizeX = Mathf.Max(1, halfBefore + halfAfter);
         int sizeZ = sizeX;
         int startX = center.x - halfBefore;
         int startZ = center.y - halfBefore;
-        ClearZone(startX, startZ, sizeX, sizeZ, type);
+        PaintZoneByRect(startX, startZ, sizeX, sizeZ, type);
     }
 
     Vector2Int GetClosestEdgePoint(Vector2Int zoneOrigin, int zoneWidth, int zoneHeight, Vector2Int referencePoint)

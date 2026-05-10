@@ -12,7 +12,7 @@ public partial class MapGenerator
         {
             int nx = gridX + dx[i];
             int nz = gridZ + dz[i];
-            if (IsInsideMap(nx, nz) && mapGrid[nx, nz].blockType.Current != zoneType)
+            if (IsInsideMap(nx, nz) && cellTypes[nx, nz] != zoneType)
                 return true;
         }
 
@@ -31,7 +31,7 @@ public partial class MapGenerator
 
                 int nx = gridX + dx;
                 int nz = gridZ + dz;
-                if (IsInsideMap(nx, nz) && mapGrid[nx, nz].blockType.Current != zoneType)
+                if (IsInsideMap(nx, nz) && cellTypes[nx, nz] != zoneType)
                     diffCount++;
             }
         }
@@ -117,7 +117,7 @@ public partial class MapGenerator
         int horizontalSpan = 1;
         for (int offset = 1; offset <= 3; offset++)
         {
-            if (IsInsideMap(gridX + offset, gridZ) && mapGrid[gridX + offset, gridZ].blockType.Current == zoneType)
+            if (IsInsideMap(gridX + offset, gridZ) && cellTypes[gridX + offset, gridZ] == zoneType)
                 horizontalSpan++;
             else
                 break;
@@ -125,7 +125,7 @@ public partial class MapGenerator
 
         for (int offset = 1; offset <= 3; offset++)
         {
-            if (IsInsideMap(gridX - offset, gridZ) && mapGrid[gridX - offset, gridZ].blockType.Current == zoneType)
+            if (IsInsideMap(gridX - offset, gridZ) && cellTypes[gridX - offset, gridZ] == zoneType)
                 horizontalSpan++;
             else
                 break;
@@ -134,7 +134,7 @@ public partial class MapGenerator
         int verticalSpan = 1;
         for (int offset = 1; offset <= 3; offset++)
         {
-            if (IsInsideMap(gridX, gridZ + offset) && mapGrid[gridX, gridZ + offset].blockType.Current == zoneType)
+            if (IsInsideMap(gridX, gridZ + offset) && cellTypes[gridX, gridZ + offset] == zoneType)
                 verticalSpan++;
             else
                 break;
@@ -142,7 +142,7 @@ public partial class MapGenerator
 
         for (int offset = 1; offset <= 3; offset++)
         {
-            if (IsInsideMap(gridX, gridZ - offset) && mapGrid[gridX, gridZ - offset].blockType.Current == zoneType)
+            if (IsInsideMap(gridX, gridZ - offset) && cellTypes[gridX, gridZ - offset] == zoneType)
                 verticalSpan++;
             else
                 break;
@@ -165,7 +165,7 @@ public partial class MapGenerator
                     continue;
 
                 total++;
-                if (mapGrid[nx, nz].blockType.Current == zoneType)
+                if (cellTypes[nx, nz] == zoneType)
                     count++;
             }
         }

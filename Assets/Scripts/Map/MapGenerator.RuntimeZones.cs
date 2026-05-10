@@ -60,7 +60,7 @@ public partial class MapGenerator
         {
             for (int z = 0; z < height; z++)
             {
-                if (visited[x, z] || mapGrid[x, z].blockType.Current != zoneType)
+                if (visited[x, z] || GetCellType(x, z) != zoneType)
                     continue;
 
                 regions.Add(FloodFillRegion(x, z, zoneType, visited));
@@ -104,7 +104,7 @@ public partial class MapGenerator
 
     void TryEnqueueRegionCell(int x, int z, BlockType zoneType, bool[,] visited, Queue<Vector2Int> queue)
     {
-        if (!IsInsideMap(x, z) || visited[x, z] || mapGrid[x, z].blockType.Current != zoneType)
+        if (!IsInsideMap(x, z) || visited[x, z] || GetCellType(x, z) != zoneType)
             return;
 
         visited[x, z] = true;

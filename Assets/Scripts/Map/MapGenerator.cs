@@ -31,6 +31,10 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(0), Tooltip("Максимальный сдвиг сайта от края карты вглубь к центру по X (в клетках).")] private int siteCenterDriftMax = 4;
     [SerializeField, Min(1), Tooltip("Множитель размера сайта, определяющий минимальное расстояние от центра карты по X.")] private int siteMinCenterDistanceMultiplier = 2;
 
+    [Header("Геометрия зон")]
+    [SerializeField, Tooltip("Форма заливки зон Spawn/Site/Neutral. Square — прямоугольник. Brush — круглая/квадратная кисть.")] private ZoneShapeMode zoneShapeMode = ZoneShapeMode.Square;
+    [SerializeField, Tooltip("Если включено и режим Brush — рисовать базовую форму кругом, иначе квадратом.")] private bool useCircularZoneBrush = true;
+
     [Header("Геометрия дорог")]
     [SerializeField, Min(0), Tooltip("Базовая толщина основных путей.")] private int mainWidth = 1;
     [SerializeField, Min(0), Tooltip("Базовая толщина фланговых путей.")] private int linkWidth = 1;
@@ -84,7 +88,17 @@ public partial class MapGenerator : MonoBehaviour
     [FormerlySerializedAs("roomMaterial")]
     [SerializeField, Tooltip("Материал для нейтральной зоны.")] private Material neutralMaterial;
 
+    [Header("Структурирование зон")]
+    [SerializeField, Tooltip("Окружать Site и Neutral зоны стенами с ограниченными входами после построения дорог.")] private bool enableZoneEnclosures = true;
+    [SerializeField, Min(1), Tooltip("Максимальная ширина одного входа в зону (в клетках). Более широкие проёмы будут сужены до этого значения.")] private int maxEntranceWidth = 2;
+    [SerializeField, Tooltip("Чем закрывать излишек ширины проёма: глухой стеной (жёсткий choke) или укрытием (тактическая преграда).")] private EntranceFillMode entranceFillMode = EntranceFillMode.Wall;
+
+    [Header("Внешние стены")]
+    [SerializeField, Min(1), Tooltip("Толщина внешних стен вокруг карты (в клетках).")] private int outerWallThickness = 2;
+    [SerializeField, Min(1), Tooltip("Высота стен в блоках (количество уровней колонны).")] private int outerWallHeight = 2;
+
     [Header("Настройки укрытий")]
+    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = false;
     [SerializeField, Tooltip("Общий множитель вероятности появления укрытий.")] private float coverSpawnMultiplier = 1f;
     [SerializeField, Tooltip("Минимальная вероятность укрытия в spawn-зоне.")] private float coverMinProbabilitySpawn = 0.3f;
     [SerializeField, Tooltip("Максимальная вероятность укрытия в spawn-зоне.")] private float coverMaxProbabilitySpawn = 0.6f;
@@ -102,7 +116,13 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий в узких коридорах.")] private float narrowCorridorCoverMultiplier = 1.3f;
     [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий на открытых участках.")] private float openAreaCoverMultiplier = 1.15f;
 
-    private BlockComponent[,] mapGrid;
+    // Логическая сетка карты: тип каждой клетки. Empty = снаружи карты (нет ничего).
+    private BlockType[,] cellTypes;
+    // Лениво создаваемые инстансы пола: только для клеток зон/дорог. Null для Empty/Wall.
+    private BlockComponent[,] floorInstances;
+    // Веса клеток (нужны Main для прогрессии вдоль пути и потенциально для covers).
+    private int[,] cellWeights;
+
     private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
     private int siteASize, siteBSize;
@@ -191,24 +211,25 @@ public partial class MapGenerator : MonoBehaviour
         Random.InitState(currentGenerationSeed);
 
         InitializeZoneCollections();
-        CreateFloorGrid();
+        InitializeCellGrid();
 
-        // Разметка зон (Спавны, Сайты, Main, Link, Neutral)
+        // Разметка зон (Спавны, Сайты, Main, Link, Neutral) — рисуем "по живому", создаём пол под помеченными клетками.
         MarkZones();
 
-        // Заполняем границы карты стенами
-        FillBorderWalls();
+        // Окружаем Site/Neutral/Spawn стенами и сужаем входы (choke points)
+        ShapeZoneEnclosures();
+
         ValidateGeneratedLayout();
         BuildAndRegisterZoneObjects();
 
-        // Обновляем материалы нижнего этажа
+        // Обновляем материалы пола
         UpdateMap();
 
-        // Формируем уровень стен (дублирование блоков)
-        DuplicateWallBlocks();
+        // Возводим внешние стены вокруг всего "острова" пола заданной толщины и высоты
+        BuildOuterWalls();
 
-        // Расставляем укрытия по обновленной логике
-        PlaceCovers();
+        if (enableCovers)
+            PlaceCovers();
     }
 
     int ResolveGenerationSeed()
@@ -223,18 +244,16 @@ public partial class MapGenerator : MonoBehaviour
             zoneBlocks[zone] = new HashSet<BlockComponent>();
     }
 
-    void CreateFloorGrid()
+    // Инициализирует логическую сетку без создания GameObject-ов. Все клетки изначально Empty.
+    void InitializeCellGrid()
     {
-        mapGrid = new BlockComponent[width, height];
+        cellTypes = new BlockType[width, height];
+        floorInstances = new BlockComponent[width, height];
+        cellWeights = new int[width, height];
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
-            {
-                Vector3 pos = new Vector3(x * blockSize, 0, z * blockSize);
-                BlockComponent floorBlock = Instantiate(floorPrefab, pos, Quaternion.identity, transform);
-                floorBlock.blockType.Set(BlockType.Floor);
-                mapGrid[x, z] = floorBlock;
-            }
+                cellTypes[x, z] = BlockType.Empty;
         }
     }
 
@@ -265,11 +284,18 @@ public partial class MapGenerator : MonoBehaviour
 
     void UpdateMap()
     {
-        foreach (BlockComponent block in mapGrid)
+        for (int x = 0; x < width; x++)
         {
-            Material material = GetMaterialForType(block.blockType.Current);
-            if (material != null && block.Renderer != null)
-                block.Renderer.material = material;
+            for (int z = 0; z < height; z++)
+            {
+                BlockComponent floor = floorInstances[x, z];
+                if (floor == null)
+                    continue;
+
+                Material material = GetMaterialForType(cellTypes[x, z]);
+                if (material != null && floor.Renderer != null)
+                    floor.Renderer.material = material;
+            }
         }
     }
 
@@ -298,38 +324,68 @@ public partial class MapGenerator : MonoBehaviour
         }
     }
 
-    bool IsBorder(int x, int z)
+    // Возводит внешние стены вокруг "острова" пола толщиной outerWallThickness и высотой outerWallHeight.
+    // Алгоритм: расширение слоями. На каждой итерации все Empty-клетки, имеющие соседа из предыдущего "фронта",
+    // помечаются как Wall и становятся фронтом для следующей итерации.
+    void BuildOuterWalls()
     {
-        return x == 0 || x == width - 1 || z == 0 || z == height - 1;
-    }
+        int thickness = Mathf.Max(1, outerWallThickness);
+        int height_ = Mathf.Max(1, outerWallHeight);
 
-    void FillBorderWalls()
-    {
+        // Изначальный фронт — все непустые клетки (зоны/дороги/уже расставленные стены).
+        List<Vector2Int> currentFront = new();
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
             {
-                if (IsBorder(x, z))
-                    TryMarkBlock(x, z, BlockType.Wall, trackZone: false);
+                if (cellTypes[x, z] != BlockType.Empty)
+                    currentFront.Add(new Vector2Int(x, z));
             }
         }
-    }
 
-    void DuplicateWallBlocks()
-    {
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
+
+        for (int layer = 0; layer < thickness; layer++)
+        {
+            List<Vector2Int> nextFront = new();
+            foreach (Vector2Int cell in currentFront)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    int nx = cell.x + dx[i];
+                    int nz = cell.y + dz[i];
+                    if (!IsInsideMap(nx, nz))
+                        continue;
+
+                    if (cellTypes[nx, nz] != BlockType.Empty)
+                        continue;
+
+                    cellTypes[nx, nz] = BlockType.Wall;
+                    nextFront.Add(new Vector2Int(nx, nz));
+                }
+            }
+
+            currentFront = nextFront;
+            if (currentFront.Count == 0)
+                break;
+        }
+
+        // Возводим колонны для всех Wall-клеток (включая внутренние стены choke points).
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
             {
-                if (IsBorder(x, z) || mapGrid[x, z].blockType.Current == BlockType.Floor)
-                    CreateWallColumn(x, z, 2);
+                if (cellTypes[x, z] == BlockType.Wall)
+                    CreateWallColumn(x, z, height_);
             }
         }
     }
 
+    // Колонна стены строится с уровня 0 (вместо пола) на levels блоков вверх.
     void CreateWallColumn(int x, int z, int levels)
     {
-        for (int level = 1; level <= levels; level++)
+        for (int level = 0; level < levels; level++)
         {
             Vector3 pos = new Vector3(x * blockSize, level * blockSize, z * blockSize);
             BlockComponent wallBlock = Instantiate(wallPrefab, pos, Quaternion.identity, transform);
@@ -339,30 +395,62 @@ public partial class MapGenerator : MonoBehaviour
         }
     }
 
+    // Помечает клетку логически и при необходимости лениво создаёт инстанс пола.
+    // Для Wall инстанс не создаётся — стены строятся отдельно колоннами в BuildOuterWalls/ShapeZoneEnclosures.
     bool TryMarkBlock(int x, int z, BlockType type, int? weight = null, bool trackZone = true)
     {
         if (!IsInsideMap(x, z))
             return false;
 
-        BlockComponent block = mapGrid[x, z];
-        block.blockType.Set(type);
-        if (block.blockType.Current != type)
+        // Имитация приоритетов BlockData.Set: запрещаем перезапись Spawn/Site/Neutral дорогами/Road.
+        BlockType currentType = cellTypes[x, z];
+        if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
+            (type == BlockType.Main || type == BlockType.Link || type == BlockType.Road))
+        {
             return false;
+        }
 
-        RemoveFromTrackedZones(block);
+        if (currentType == type && weight == null)
+            return true;
 
+        cellTypes[x, z] = type;
         if (weight.HasValue)
-            block.weight = weight.Value;
+            cellWeights[x, z] = weight.Value;
 
-        if (trackZone && zoneBlocks.TryGetValue(type, out HashSet<BlockComponent> blocks))
-            blocks.Add(block);
+        // Уберём из старого набора zoneBlocks, если был там.
+        if (floorInstances[x, z] != null)
+            RemoveFromTrackedZones(floorInstances[x, z]);
+
+        bool needsFloor = type != BlockType.Empty && type != BlockType.Wall;
+        if (needsFloor)
+        {
+            if (floorInstances[x, z] == null)
+            {
+                Vector3 pos = new Vector3(x * blockSize, 0f, z * blockSize);
+                floorInstances[x, z] = Instantiate(floorPrefab, pos, Quaternion.identity, transform);
+            }
+
+            BlockComponent floor = floorInstances[x, z];
+            floor.blockType.Set(type);
+            if (weight.HasValue)
+                floor.weight = weight.Value;
+
+            if (trackZone && zoneBlocks.TryGetValue(type, out HashSet<BlockComponent> blocks))
+                blocks.Add(floor);
+        }
+        else if (floorInstances[x, z] != null)
+        {
+            // Стало стеной/пустотой — убираем визуальный пол.
+            Destroy(floorInstances[x, z].gameObject);
+            floorInstances[x, z] = null;
+        }
 
         return true;
     }
 
     void RemoveFromTrackedZones(BlockComponent block)
     {
-        if (zoneBlocks == null)
+        if (zoneBlocks == null || block == null)
             return;
 
         foreach (HashSet<BlockComponent> blocks in zoneBlocks.Values)
@@ -372,6 +460,22 @@ public partial class MapGenerator : MonoBehaviour
     bool IsInsideMap(int x, int z)
     {
         return x >= 0 && x < width && z >= 0 && z < height;
+    }
+
+    BlockType GetCellType(int x, int z)
+    {
+        return IsInsideMap(x, z) ? cellTypes[x, z] : BlockType.Empty;
+    }
+
+    int GetCellWeight(int x, int z)
+    {
+        return IsInsideMap(x, z) ? cellWeights[x, z] : 0;
+    }
+
+    // Клетка на самом краю массива карты (старое определение IsBorder).
+    bool IsAtMapEdge(int x, int z)
+    {
+        return x == 0 || x == width - 1 || z == 0 || z == height - 1;
     }
 
     int ClampGridX(int x)

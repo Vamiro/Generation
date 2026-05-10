@@ -340,16 +340,18 @@ MonoBehaviour:
   width: 80
   height: 80
   blockSize: 2
-  spawnZoneSizeMin: 4
-  spawnZoneSizeMax: 6
-  siteZoneSizeMin: 5
-  siteZoneSizeMax: 7
+  spawnZoneSizeMin: 6
+  spawnZoneSizeMax: 7
+  siteZoneSizeMin: 6
+  siteZoneSizeMax: 9
   innerPadding: 4
   spawnHorizontalOffset: 3
   siteLineBiasToDefender: 0.25
   siteVerticalJitter: 2
   siteCenterDriftMax: 4
   siteMinCenterDistanceMultiplier: 2
+  zoneShapeMode: 0
+  useCircularZoneBrush: 1
   mainWidth: 2
   linkWidth: 1
   useCircularPathBrush: 1
@@ -358,7 +360,7 @@ MonoBehaviour:
   defenderLinkOffsetFromCenter: 6
   useFixedSeed: 0
   generationSeed: -874935757
-  currentGenerationSeed: -874935757
+  currentGenerationSeed: 1368260024
   astarMainHorizontalBias: 0.85
   astarLinkHorizontalBias: 0.15
   astarTurnPenalty: 0.35
@@ -384,6 +386,12 @@ MonoBehaviour:
   floorMaterial: {fileID: 2100000, guid: 221a7748d9526ee41979a27d9302c862, type: 2}
   wallMaterial: {fileID: 2100000, guid: 0eece8546e0a519468a9dbec5bbf6dd8, type: 2}
   neutralMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
+  enableZoneEnclosures: 1
+  maxEntranceWidth: 2
+  entranceFillMode: 0
+  outerWallThickness: 2
+  outerWallHeight: 2
+  enableCovers: 0
   coverSpawnMultiplier: 0.4
   coverMinProbabilitySpawn: 0.3
   coverMaxProbabilitySpawn: 0.6

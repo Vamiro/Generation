@@ -203,10 +203,10 @@ public partial class MapGenerator
     {
         float cost = 1f;
 
-        if (IsBorder(next.x, next.y))
+        if (IsAtMapEdge(next.x, next.y))
             cost += astarBorderPenalty;
 
-        BlockType cellType = mapGrid[next.x, next.y].blockType.Current;
+        BlockType cellType = GetCellType(next.x, next.y);
         if (cellType == BlockType.Main || cellType == BlockType.Link)
             cost += astarRoadReusePenalty;
 
@@ -281,7 +281,9 @@ public partial class MapGenerator
 
     bool CanTraverseForPath(int x, int z)
     {
-        return IsInsideMap(x, z) && mapGrid[x, z].blockType.Current != BlockType.Wall;
+        // Дороги пробиваются по любой клетке кроме стен. Empty-клетки внутри границ считаем проходимыми
+        // (по ним и будет проложена дорога — Empty потом превратится в Main/Link).
+        return IsInsideMap(x, z) && cellTypes[x, z] != BlockType.Wall;
     }
 
     float Heuristic(Vector2Int from, Vector2Int to)
@@ -305,7 +307,7 @@ public partial class MapGenerator
                 if (!IsInsideMap(targetX, targetZ))
                     continue;
 
-                if (blockType == BlockType.Link && mapGrid[targetX, targetZ].blockType.Current == BlockType.Main)
+                if (blockType == BlockType.Link && cellTypes[targetX, targetZ] == BlockType.Main)
                     continue;
 
                 TryMarkBlock(targetX, targetZ, blockType, weight);
