@@ -23,7 +23,7 @@ public partial class MapGenerator
             }
         }
 
-        Vector2Int[] spawns = { spawnA, spawnB };
+        Vector2Int[] spawns = { attackerSpawn, defenderSpawn };
         Vector2Int[] sites = { siteA, siteB };
         foreach (Vector2Int spawn in spawns)
         {
@@ -36,63 +36,21 @@ public partial class MapGenerator
             }
         }
 
-        ValidateSiteAccessAndFairness(siteA, "A");
-        ValidateSiteAccessAndFairness(siteB, "B");
-    }
-
-    void ValidateSiteAccessAndFairness(Vector2Int siteOrigin, string siteLabel)
-    {
-        Vector2Int siteCenter = GetSiteCenter(siteOrigin);
-        int entryCount = CountSiteEntries(siteOrigin);
-        if (entryCount < siteEntryMin)
-            Debug.LogWarning($"MapGenerator: у сайта {siteLabel} недостаточно входов ({entryCount}/{siteEntryMin}).");
-
-        int distanceA = GetShortestPathDistance(spawnA, siteCenter);
-        int distanceB = GetShortestPathDistance(spawnB, siteCenter);
-        if (distanceA < 0 || distanceB < 0)
-            return;
-
-        if (Mathf.Abs(distanceA - distanceB) > siteFairnessTolerance)
+        if (generateNeutralZone && IsWalkableCell(neutralCenter.x, neutralCenter.y))
         {
-            Debug.LogWarning(
-                $"MapGenerator: fairness по сайту {siteLabel} нарушен (A={distanceA}, B={distanceB}, tol={siteFairnessTolerance}).");
-        }
-    }
-
-    int CountSiteEntries(Vector2Int siteOrigin)
-    {
-        int entries = 0;
-        for (int x = siteOrigin.x; x < siteOrigin.x + siteZoneWidth; x++)
-        {
-            for (int z = siteOrigin.y; z < siteOrigin.y + siteZoneHeight; z++)
+            foreach (Vector2Int spawn in spawns)
             {
-                if (!IsInsideMap(x, z))
-                    continue;
+                if (!IsReachable(spawn, neutralCenter))
+                    Debug.LogWarning($"MapGenerator: нет пути от спавна {spawn} к нейтральной зоне {neutralCenter}.");
+            }
 
-                entries += CountExternalWalkableNeighbors(x, z, BlockType.Site);
+            Vector2Int[] siteCenters = { GetSiteCenter(siteA, siteASize), GetSiteCenter(siteB, siteBSize) };
+            foreach (Vector2Int siteCenter in siteCenters)
+            {
+                if (!IsReachable(neutralCenter, siteCenter))
+                    Debug.LogWarning($"MapGenerator: нет пути от нейтральной зоны {neutralCenter} к сайту {siteCenter}.");
             }
         }
-
-        return entries;
-    }
-
-    int CountExternalWalkableNeighbors(int x, int z, BlockType ownType)
-    {
-        int[] dx = { 0, 1, 0, -1 };
-        int[] dz = { 1, 0, -1, 0 };
-        int count = 0;
-        for (int i = 0; i < 4; i++)
-        {
-            int nx = x + dx[i];
-            int nz = z + dz[i];
-            if (!IsInsideMap(nx, nz) || !IsWalkableCell(nx, nz))
-                continue;
-
-            if (mapGrid[nx, nz].blockType.Current != ownType)
-                count++;
-        }
-
-        return count;
     }
 
     bool IsReachable(Vector2Int start, Vector2Int end)
@@ -123,55 +81,6 @@ public partial class MapGenerator
         }
 
         return false;
-    }
-
-    int GetShortestPathDistance(Vector2Int start, Vector2Int end)
-    {
-        int startX = ClampGridX(start.x);
-        int startZ = ClampGridZ(start.y);
-        int endX = ClampGridX(end.x);
-        int endZ = ClampGridZ(end.y);
-
-        if (!IsWalkableCell(startX, startZ) || !IsWalkableCell(endX, endZ))
-            return -1;
-
-        bool[,] visited = new bool[width, height];
-        Queue<Vector2Int> queue = new();
-        Queue<int> distanceQueue = new();
-        queue.Enqueue(new Vector2Int(startX, startZ));
-        distanceQueue.Enqueue(0);
-        visited[startX, startZ] = true;
-
-        while (queue.Count > 0)
-        {
-            Vector2Int current = queue.Dequeue();
-            int distance = distanceQueue.Dequeue();
-            if (current.x == endX && current.y == endZ)
-                return distance;
-
-            EnqueueDistanceNeighbor(current.x + 1, current.y, distance + 1, visited, queue, distanceQueue);
-            EnqueueDistanceNeighbor(current.x - 1, current.y, distance + 1, visited, queue, distanceQueue);
-            EnqueueDistanceNeighbor(current.x, current.y + 1, distance + 1, visited, queue, distanceQueue);
-            EnqueueDistanceNeighbor(current.x, current.y - 1, distance + 1, visited, queue, distanceQueue);
-        }
-
-        return -1;
-    }
-
-    void EnqueueDistanceNeighbor(
-        int x,
-        int z,
-        int distance,
-        bool[,] visited,
-        Queue<Vector2Int> queue,
-        Queue<int> distanceQueue)
-    {
-        if (!IsInsideMap(x, z) || visited[x, z] || !IsWalkableCell(x, z))
-            return;
-
-        visited[x, z] = true;
-        queue.Enqueue(new Vector2Int(x, z));
-        distanceQueue.Enqueue(distance);
     }
 
     void TryEnqueueReachable(int x, int z, bool[,] visited, Queue<Vector2Int> queue)

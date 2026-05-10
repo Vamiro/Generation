@@ -337,65 +337,42 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0410d3a21264d8045a7b4e0dd3ea1b3c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  width: 100
-  height: 100
+  width: 80
+  height: 80
   blockSize: 2
-  spawnZoneSizeMin: 10
-  spawnZoneSizeMax: 14
-  siteZoneWidth: 6
-  siteZoneHeight: 6
+  spawnZoneSizeMin: 4
+  spawnZoneSizeMax: 6
+  siteZoneSizeMin: 5
+  siteZoneSizeMax: 7
   innerPadding: 4
-  spawnBandRatio: 0.25
-  horizontalJitterRatio: 0.1
-  siteDepthRatio: 0.33
-  spawnOffset: 2
   spawnHorizontalOffset: 3
-  siteDistanceFromSpawnMin: 6
-  siteDistanceFromSpawnMax: 64
-  siteFairnessTolerance: 5
-  sitePlacementAttempts: 30
-  siteEntryMin: 2
-  sitePairDistanceMin: 4
-  mainPathHorizontalChance: 0.85
-  linkPathHorizontalChance: 0.15
-  linkConnectionCount: 2
-  preferShortestConnections: 1
-  useFixedSeed: 1
-  generationSeed: 489076278
-  currentGenerationSeed: 489076278
-  spawnAIsDefender: 1
+  siteLineBiasToDefender: 0.25
+  siteVerticalJitter: 2
+  siteCenterDriftMax: 4
+  siteMinCenterDistanceMultiplier: 2
   mainWidth: 2
   linkWidth: 1
-  roadWidthRandomDelta: 0
-  addStraightRoadIndentations: 1
-  straightRoadIndentMinLength: 8
-  straightRoadIndentInterval: 4
-  straightRoadIndentDepth: 1
-  straightRoadIndentChance: 0.65
-  routeLinkViaRoom: 0
-  linkViaRoomChance: 0.881
-  linkRoomExitOffset: 4
-  linkHubBlendToCenter: 0.5
-  linkCanMergeIntoMain: 1
-  astarLinkMergeMainPenalty: 0.25
-  astarTurnPenalty: 0.3
-  astarRoadReusePenalty: 0
-  astarLinkAvoidMainPenalty: 2
-  astarMainAvoidLinkPenalty: 1
-  astarBorderPenalty: 1.5
-  astarLinkCenterPenalty: 1
-  astarAllowDiagonalMoves: 1
-  astarDiagonalPenalty: 0.9
-  astarRandomJitter: 0.45
   useCircularPathBrush: 1
-  useFallbackPathWhenAstarFails: 1
-  generateRoomZone: 1
-  roomSize: {x: 9, y: 10}
-  roomGrowthSteps: 12
-  roomGrowthBaseChance: 0.35
-  roomGrowthDistanceFactor: 0.45
-  roomEmptyPenaltyFactor: 0.08
-  roomAntiMergeContactThreshold: 1
+  attackerLinkOffsetFromCenter: 9
+  attackerLinkOffsetJitter: 9
+  defenderLinkOffsetFromCenter: 6
+  useFixedSeed: 0
+  generationSeed: -874935757
+  currentGenerationSeed: -874935757
+  astarMainHorizontalBias: 0.85
+  astarLinkHorizontalBias: 0.15
+  astarTurnPenalty: 0.35
+  astarRoadReusePenalty: 1.5
+  astarCrossTypePenalty: 2
+  astarBorderPenalty: 2
+  astarMainOuterBias: 0.35
+  astarLinkCenterPenalty: 1
+  astarRandomJitter: 0.55
+  generateNeutralZone: 1
+  neutralZoneSize: {x: 5, y: 5}
+  neutralZoneBiasToSites: 0.314
+  neutralZoneHorizontalJitter: 6
+  neutralZoneVerticalJitter: 1
   floorPrefab: {fileID: 2700142948874212555, guid: e7a9f59f26bea1e4883d1e17da6789e1, type: 3}
   wallPrefab: {fileID: 389949903175999369, guid: a238d4769dcc478459799927e274e527, type: 3}
   coverPrefab: {fileID: 4604575915924467063, guid: c561ebefa408da9488379415caaa4d16, type: 3}
@@ -406,18 +383,18 @@ MonoBehaviour:
   linkMaterial: {fileID: 2100000, guid: f94574278cac08f499f077e69cef2bf7, type: 2}
   floorMaterial: {fileID: 2100000, guid: 221a7748d9526ee41979a27d9302c862, type: 2}
   wallMaterial: {fileID: 2100000, guid: 0eece8546e0a519468a9dbec5bbf6dd8, type: 2}
-  roomMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
-  coverSpawnMultiplier: 0.02
+  neutralMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
+  coverSpawnMultiplier: 0.4
   coverMinProbabilitySpawn: 0.3
   coverMaxProbabilitySpawn: 0.6
   coverMinProbabilitySite: 0.2
   coverMaxProbabilitySite: 0.5
-  coverMinProbabilityMain: 0.4
+  coverMinProbabilityMain: 0.1
   coverMaxProbabilityMain: 0.8
-  coverMinProbabilityLink: 0.4
+  coverMinProbabilityLink: 0.1
   coverMaxProbabilityLink: 0.8
-  coverMinProbabilityRoom: 0.5
-  coverMaxProbabilityRoom: 0.7
+  coverMinProbabilityNeutral: 0.5
+  coverMaxProbabilityNeutral: 0.7
   narrowCorridorWidthThreshold: 2
   narrowCorridorCoverMultiplier: 1.3
   openAreaCoverMultiplier: 1.15

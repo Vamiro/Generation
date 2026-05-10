@@ -11,116 +11,102 @@ using UnityEditor;
 public partial class MapGenerator : MonoBehaviour
 {
     [Header("Размер карты")]
-    [SerializeField] private int width = 20; // Ширина карты в клетках по оси X.
-    [SerializeField] private int height = 20; // Высота карты в клетках по оси Z.
+    [SerializeField, Tooltip("Ширина карты в клетках по оси X.")] private int width = 20;
+    [SerializeField, Tooltip("Высота карты в клетках по оси Z.")] private int height = 20;
 
     [Header("Параметры блока")]
-    [SerializeField, Min(0.01f)] private float blockSize = 1f; // Размер одной клетки в мировых координатах.
+    [SerializeField, Min(0.01f), Tooltip("Размер одной клетки в мировых координатах.")] private float blockSize = 1f;
 
     [Header("Настройки зон")]
-    [SerializeField] private int spawnZoneSizeMin = 8; // Минимальный размер зоны спавна.
-    [SerializeField] private int spawnZoneSizeMax = 10; // Максимальный размер зоны спавна.
-    [SerializeField] private int siteZoneWidth = 4; // Ширина зоны сайта.
-    [SerializeField] private int siteZoneHeight = 4; // Высота зоны сайта.
+    [SerializeField, Tooltip("Минимальный размер зоны спавна.")] private int spawnZoneSizeMin = 8;
+    [SerializeField, Tooltip("Максимальный размер зоны спавна.")] private int spawnZoneSizeMax = 10;
+    [SerializeField, Tooltip("Минимальный размер зоны сайта.")] private int siteZoneSizeMin = 4;
+    [SerializeField, Tooltip("Максимальный размер зоны сайта.")] private int siteZoneSizeMax = 6;
 
     [Header("Позиционирование зон")]
-    [SerializeField, Min(0)] private int innerPadding = 4; // Внутренний отступ от границы карты для размещения зон.
-    [SerializeField, Range(0.05f, 0.5f)] private float spawnBandRatio = 0.25f; // Доля высоты карты для полос размещения спавнов.
-    [SerializeField, Range(0f, 0.5f)] private float horizontalJitterRatio = 0.1f; // Доля ширины, задающая случайный сдвиг зон по X.
-    [SerializeField, Range(0.1f, 0.9f)] private float siteDepthRatio = 0.33f; // Относительная глубина размещения сайтов от края.
-    [SerializeField, Min(0)] private int spawnOffset = 2; // Радиус случайного смещения старта link от центра спавна.
-    [SerializeField, Min(0)] private int spawnHorizontalOffset = 3; // Максимальный сдвиг спавна B относительно спавна A по X.
-    [SerializeField, Min(1)] private int siteDistanceFromSpawnMin = 6; // Минимальная дистанция от спавна до сайта.
-    [SerializeField, Min(1)] private int siteDistanceFromSpawnMax = 64; // Максимальная дистанция от спавна до сайта.
-    [SerializeField, Min(0)] private int siteFairnessTolerance = 5; // Допустимая разница дистанций до сайта для fairness.
-    [SerializeField, Min(1)] private int sitePlacementAttempts = 30; // Количество попыток подобрать валидные позиции сайтов.
-    [SerializeField, Min(1)] private int siteEntryMin = 2; // Минимум внешних входов в зону сайта.
-    [SerializeField, Min(0)] private int sitePairDistanceMin = 4; // Минимальная дистанция между центрами сайтов.
-
-    [Header("Маршруты link")]
-    [SerializeField, Range(1, 2)] private int linkConnectionCount = 2; // Базовое число link-маршрутов до fallback-покрытия сайтов.
-    [SerializeField] private bool preferShortestConnections = true; // Приоритет более коротких link-маршрутов.
-    [SerializeField] private bool spawnAIsDefender = true; // Назначить спавн A стороной defender.
-    [FormerlySerializedAs("routeLinkViaRoom")]
-    [SerializeField] private bool routeLinkViaNeutral = true; // Разрешить прокладку link через нейтральную зону.
-    [FormerlySerializedAs("linkViaRoomChance")]
-    [SerializeField, Range(0f, 1f)] private float linkViaNeutralChance = 1f; // Вероятность маршрутизации link через нейтральную зону.
-    [FormerlySerializedAs("linkRoomExitOffset")]
-    [SerializeField, Min(0)] private int linkNeutralExitOffset = 1; // Смещение точки выхода link из нейтральной зоны/хаба.
-    [SerializeField, Range(0f, 1f)] private float linkHubBlendToCenter = 0.5f; // Насколько hub link тянется к центру карты.
+    [SerializeField, Min(0), Tooltip("Внутренний отступ от границы карты для размещения зон.")] private int innerPadding = 4;
+    [SerializeField, Min(0), Tooltip("Максимальный сдвиг каждого спавна по X от центра карты.")] private int spawnHorizontalOffset = 3;
+    [SerializeField, Range(0f, 0.5f), Tooltip("Смещение горизонтальной линии сайтов от центра между спавнами в сторону защитника (доля половины расстояния).")] private float siteLineBiasToDefender = 0.25f;
+    [SerializeField, Min(0), Tooltip("Максимальный сдвиг сайта по Z вдоль линии сайтов.")] private int siteVerticalJitter = 2;
+    [SerializeField, Min(0), Tooltip("Максимальный сдвиг сайта от края карты вглубь к центру по X (в клетках).")] private int siteCenterDriftMax = 4;
+    [SerializeField, Min(1), Tooltip("Множитель размера сайта, определяющий минимальное расстояние от центра карты по X.")] private int siteMinCenterDistanceMultiplier = 2;
 
     [Header("Геометрия дорог")]
-    [SerializeField, Min(0)] private int mainWidth = 1; // Базовая толщина основных путей.
-    [SerializeField, Min(0)] private int linkWidth = 1; // Базовая толщина фланговых путей.
-    [SerializeField, Min(0)] private int roadWidthRandomDelta = 1; // Случайный разброс толщины дороги вокруг базовой.
-    [SerializeField] private bool useCircularPathBrush = false; // Использовать круговую кисть при расширении толщины дороги.
+    [SerializeField, Min(0), Tooltip("Базовая толщина основных путей.")] private int mainWidth = 1;
+    [SerializeField, Min(0), Tooltip("Базовая толщина фланговых путей.")] private int linkWidth = 1;
+    [SerializeField, Tooltip("Использовать круговую кисть при расширении толщины дороги.")] private bool useCircularPathBrush = false;
+    [SerializeField, Min(1), Tooltip("Базовое смещение link-точки атакующего по X от центра карты (расстояние между двумя link).")] private int attackerLinkOffsetFromCenter = 4;
+    [SerializeField, Min(0), Tooltip("Случайный jitter X-смещения link-точки атакующего относительно базового смещения.")] private int attackerLinkOffsetJitter = 2;
+    [SerializeField, Min(0), Tooltip("Максимальный сдвиг link-точки защитника по X от центра карты.")] private int defenderLinkOffsetFromCenter = 2;
 
     [Header("Сид генерации")]
-    [SerializeField] private bool useFixedSeed; // Использовать фиксированный seed вместо случайного.
-    [SerializeField] private int generationSeed = 42; // Seed генерации, если включен фиксированный seed.
-    [SerializeField, ReadOnlyInInspector] private int currentGenerationSeed; // Seed, примененный в текущей генерации.
+    [SerializeField, Tooltip("Использовать фиксированный seed вместо случайного.")] private bool useFixedSeed;
+    [SerializeField, Tooltip("Seed генерации, если включен фиксированный seed.")] private int generationSeed = 42;
+    [SerializeField, ReadOnlyInInspector, Tooltip("Seed, примененный в текущей генерации.")] private int currentGenerationSeed;
 
     [Header("A*")]
     [FormerlySerializedAs("mainPathHorizontalChance")]
-    [SerializeField, Range(0f, 1f)] private float astarMainHorizontalBias = 0.85f; // Приоритет горизонтального движения для main-пути при равных узлах.
+    [SerializeField, Range(0f, 1f), Tooltip("Приоритет горизонтального движения для main-пути при равных узлах.")] private float astarMainHorizontalBias = 0.85f;
     [FormerlySerializedAs("linkPathHorizontalChance")]
-    [SerializeField, Range(0f, 1f)] private float astarLinkHorizontalBias = 0.15f; // Приоритет горизонтального движения для link-пути при равных узлах.
-    [SerializeField, Range(0f, 5f)] private float astarTurnPenalty = 0.35f; // Штраф за поворот маршрута.
-    [SerializeField, Range(0f, 10f)] private float astarRoadReusePenalty = 1.5f; // Штраф за повторное использование уже занятых дорог.
-    [SerializeField, Range(0f, 10f)] private float astarLinkAvoidMainPenalty = 2f; // Дополнительный штраф link за движение по main.
-    [SerializeField, Range(0f, 10f)] private float astarMainAvoidLinkPenalty = 1f; // Дополнительный штраф main за движение по link.
-    [SerializeField, Range(0f, 5f)] private float astarBorderPenalty = 1.5f; // Штраф за прохождение близко к границам карты.
-    [SerializeField, Range(0f, 5f)] private float astarLinkCenterPenalty = 1f; // Штраф link за прохождение через центральную область.
-    [SerializeField] private bool astarAllowDiagonalMoves = false; // Разрешить диагональные шаги в A*.
-    [SerializeField, Range(0f, 5f)] private float astarDiagonalPenalty = 1.25f; // Стоимость диагонального шага относительно прямого.
-    [SerializeField, Range(0f, 2f)] private float astarRandomJitter = 0.05f; // Случайный шум стоимости пути для вариативности.
-    [SerializeField] private bool linkCanMergeIntoMain = true; // Разрешить link использовать клетки main в A*.
-    [SerializeField, Range(0f, 5f)] private float astarLinkMergeMainPenalty = 0.25f; // Штраф A* за слияние link в main.
-    [SerializeField] private bool useFallbackPathWhenAstarFails = true; // Строить fallback-путь, если A* не нашел маршрут.
+    [SerializeField, Range(0f, 1f), Tooltip("Приоритет горизонтального движения для link-пути при равных узлах.")] private float astarLinkHorizontalBias = 0.15f;
+    [SerializeField, Range(0f, 5f), Tooltip("Штраф за поворот маршрута.")] private float astarTurnPenalty = 0.35f;
+    [SerializeField, Range(0f, 10f), Tooltip("Штраф за повторное использование уже занятых дорог.")] private float astarRoadReusePenalty = 1.5f;
+    [FormerlySerializedAs("astarLinkAvoidMainPenalty")]
+    [FormerlySerializedAs("astarMainAvoidLinkPenalty")]
+    [SerializeField, Range(0f, 10f), Tooltip("Штраф за движение по дороге другого типа (Main<->Link).")] private float astarCrossTypePenalty = 2f;
+    [SerializeField, Range(0f, 5f), Tooltip("Штраф за прохождение близко к границам карты.")] private float astarBorderPenalty = 1.5f;
+    [SerializeField, Range(0f, 10f), Tooltip("Штраф main-пути за удаление от внешних границ карты (выше — сильнее прижимает к краям).")] private float astarMainOuterBias = 3f;
+    [SerializeField, Range(0f, 5f), Tooltip("Штраф link за прохождение через центральную область.")] private float astarLinkCenterPenalty = 1f;
+    [SerializeField, Range(0f, 2f), Tooltip("Случайный шум стоимости пути для вариативности.")] private float astarRandomJitter = 0.05f;
 
     [Header("Нейтральная зона")]
     [FormerlySerializedAs("generateRoomZone")]
-    [SerializeField] private bool generateNeutralZone = true; // Генерировать фиксированную нейтральную зону.
+    [SerializeField, Tooltip("Генерировать фиксированную нейтральную зону.")] private bool generateNeutralZone = true;
     [FormerlySerializedAs("roomSize")]
-    [SerializeField] private Vector2Int neutralZoneSize = new Vector2Int(5, 5); // Размер нейтральной зоны.
+    [SerializeField, Tooltip("Размер нейтральной зоны.")] private Vector2Int neutralZoneSize = new Vector2Int(5, 5);
+    [SerializeField, Range(0f, 0.5f), Tooltip("Смещение центра нейтральной зоны по Z от центра карты к линии сайтов (доля расстояния).")] private float neutralZoneBiasToSites = 0.2f;
+    [SerializeField, Min(0), Tooltip("Максимальный случайный сдвиг центра нейтральной зоны по X от центра карты.")] private int neutralZoneHorizontalJitter = 2;
+    [SerializeField, Min(0), Tooltip("Максимальный случайный сдвиг центра нейтральной зоны по Z от смещённой линии.")] private int neutralZoneVerticalJitter = 1;
 
     [Header("Префабы")]
-    [SerializeField] private BlockComponent floorPrefab; // Префаб базовой клетки пола.
-    [SerializeField] private BlockComponent wallPrefab; // Префаб клетки стены.
-    [SerializeField] private GameObject coverPrefab; // Префаб объекта укрытия.
+    [SerializeField, Tooltip("Префаб базовой клетки пола.")] private BlockComponent floorPrefab;
+    [SerializeField, Tooltip("Префаб клетки стены.")] private BlockComponent wallPrefab;
+    [SerializeField, Tooltip("Префаб объекта укрытия.")] private GameObject coverPrefab;
 
     [Header("Материалы")]
-    [SerializeField] private Material spawnMaterial; // Материал для зоны спавна.
-    [SerializeField] private Material roadMaterial; // Резервный материал для дорожных зон.
-    [SerializeField] private Material siteMaterial; // Материал для зоны сайта.
-    [SerializeField] private Material mainMaterial; // Материал для main-дорог.
-    [SerializeField] private Material linkMaterial; // Материал для link-дорог.
-    [SerializeField] private Material floorMaterial; // Материал для обычного пола.
-    [SerializeField] private Material wallMaterial; // Материал для стен.
+    [SerializeField, Tooltip("Материал для зоны спавна.")] private Material spawnMaterial;
+    [SerializeField, Tooltip("Резервный материал для дорожных зон.")] private Material roadMaterial;
+    [SerializeField, Tooltip("Материал для зоны сайта.")] private Material siteMaterial;
+    [SerializeField, Tooltip("Материал для main-дорог.")] private Material mainMaterial;
+    [SerializeField, Tooltip("Материал для link-дорог.")] private Material linkMaterial;
+    [SerializeField, Tooltip("Материал для обычного пола.")] private Material floorMaterial;
+    [SerializeField, Tooltip("Материал для стен.")] private Material wallMaterial;
     [FormerlySerializedAs("roomMaterial")]
-    [SerializeField] private Material neutralMaterial; // Материал для нейтральной зоны.
+    [SerializeField, Tooltip("Материал для нейтральной зоны.")] private Material neutralMaterial;
 
     [Header("Настройки укрытий")]
-    [SerializeField] private float coverSpawnMultiplier = 1f; // Общий множитель вероятности появления укрытий.
-    [SerializeField] private float coverMinProbabilitySpawn = 0.3f; // Минимальная вероятность укрытия в spawn-зоне.
-    [SerializeField] private float coverMaxProbabilitySpawn = 0.6f; // Максимальная вероятность укрытия в spawn-зоне.
-    [SerializeField] private float coverMinProbabilitySite  = 0.2f; // Минимальная вероятность укрытия в site-зоне.
-    [SerializeField] private float coverMaxProbabilitySite  = 0.5f; // Максимальная вероятность укрытия в site-зоне.
-    [SerializeField] private float coverMinProbabilityMain  = 0.1f; // Минимальная вероятность укрытия в main-зоне.
-    [SerializeField] private float coverMaxProbabilityMain  = 0.8f; // Максимальная вероятность укрытия в main-зоне.
-    [SerializeField] private float coverMinProbabilityLink  = 0.1f; // Минимальная вероятность укрытия в link-зоне.
-    [SerializeField] private float coverMaxProbabilityLink  = 0.8f; // Максимальная вероятность укрытия в link-зоне.
+    [SerializeField, Tooltip("Общий множитель вероятности появления укрытий.")] private float coverSpawnMultiplier = 1f;
+    [SerializeField, Tooltip("Минимальная вероятность укрытия в spawn-зоне.")] private float coverMinProbabilitySpawn = 0.3f;
+    [SerializeField, Tooltip("Максимальная вероятность укрытия в spawn-зоне.")] private float coverMaxProbabilitySpawn = 0.6f;
+    [SerializeField, Tooltip("Минимальная вероятность укрытия в site-зоне.")] private float coverMinProbabilitySite = 0.2f;
+    [SerializeField, Tooltip("Максимальная вероятность укрытия в site-зоне.")] private float coverMaxProbabilitySite = 0.5f;
+    [SerializeField, Tooltip("Минимальная вероятность укрытия в main-зоне.")] private float coverMinProbabilityMain = 0.1f;
+    [SerializeField, Tooltip("Максимальная вероятность укрытия в main-зоне.")] private float coverMaxProbabilityMain = 0.8f;
+    [SerializeField, Tooltip("Минимальная вероятность укрытия в link-зоне.")] private float coverMinProbabilityLink = 0.1f;
+    [SerializeField, Tooltip("Максимальная вероятность укрытия в link-зоне.")] private float coverMaxProbabilityLink = 0.8f;
     [FormerlySerializedAs("coverMinProbabilityRoom")]
-    [SerializeField] private float coverMinProbabilityNeutral  = 0.5f; // Минимальная вероятность укрытия в neutral-зоне.
+    [SerializeField, Tooltip("Минимальная вероятность укрытия в neutral-зоне.")] private float coverMinProbabilityNeutral = 0.5f;
     [FormerlySerializedAs("coverMaxProbabilityRoom")]
-    [SerializeField] private float coverMaxProbabilityNeutral  = 0.7f; // Максимальная вероятность укрытия в neutral-зоне.
-    [SerializeField, Min(1)] private int narrowCorridorWidthThreshold = 2; // Порог ширины, ниже которого проход считается узким.
-    [SerializeField, Range(0.5f, 2f)] private float narrowCorridorCoverMultiplier = 1.3f; // Множитель вероятности укрытий в узких коридорах.
-    [SerializeField, Range(0.5f, 2f)] private float openAreaCoverMultiplier = 1.15f; // Множитель вероятности укрытий на открытых участках.
+    [SerializeField, Tooltip("Максимальная вероятность укрытия в neutral-зоне.")] private float coverMaxProbabilityNeutral = 0.7f;
+    [SerializeField, Min(1), Tooltip("Порог ширины, ниже которого проход считается узким.")] private int narrowCorridorWidthThreshold = 2;
+    [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий в узких коридорах.")] private float narrowCorridorCoverMultiplier = 1.3f;
+    [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий на открытых участках.")] private float openAreaCoverMultiplier = 1.15f;
 
     private BlockComponent[,] mapGrid;
-    private Vector2Int spawnA, spawnB;
+    private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
+    private int siteASize, siteBSize;
+    private Vector2Int neutralCenter;
 
     // Словарь хранит уникальные блоки по зонам (без дублей).
     private Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks;
@@ -252,35 +238,6 @@ public partial class MapGenerator : MonoBehaviour
         }
     }
 
-    private struct LayoutSettings
-    {
-        public int UsableWidth;
-        public int UsableHeight;
-        public int SpawnBandSize;
-        public int HorizontalJitter;
-        public int SiteDepth;
-    }
-
-    private enum ZoneEdge
-    {
-        Top,
-        Bottom,
-        Left,
-        Right
-    }
-
-    private readonly struct TeamRoutePlan
-    {
-        public TeamRoutePlan(Vector2Int spawn, Vector2Int linkSite)
-        {
-            Spawn = spawn;
-            LinkSite = linkSite;
-        }
-
-        public Vector2Int Spawn { get; }
-        public Vector2Int LinkSite { get; }
-    }
-
     private sealed class ZoneRegion
     {
         public BlockType Type;
@@ -300,26 +257,10 @@ public partial class MapGenerator : MonoBehaviour
 
     void MarkZones()
     {
-        LayoutSettings layout = BuildLayoutSettings();
-        PlaceSpawnZones(layout);
-        PlaceSiteZones(layout);
+        PlaceSpawnZones();
+        PlaceSiteZones();
         MarkNeutralZone();
         BuildStructuredRoutes();
-    }
-
-    LayoutSettings BuildLayoutSettings()
-    {
-        int usableWidth = Mathf.Max(1, width - innerPadding);
-        int usableHeight = Mathf.Max(1, height - innerPadding);
-
-        return new LayoutSettings
-        {
-            UsableWidth = usableWidth,
-            UsableHeight = usableHeight,
-            SpawnBandSize = Mathf.Max(1, Mathf.RoundToInt(usableHeight * spawnBandRatio)),
-            HorizontalJitter = Mathf.Max(1, Mathf.RoundToInt(usableWidth * horizontalJitterRatio)),
-            SiteDepth = Mathf.Clamp(Mathf.RoundToInt(usableHeight * siteDepthRatio), 0, usableHeight - 1)
-        };
     }
 
     void UpdateMap()
