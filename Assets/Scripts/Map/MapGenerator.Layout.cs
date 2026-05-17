@@ -12,30 +12,32 @@ public partial class MapGenerator
 {
     void PlaceSpawnZones()
     {
-        int spawnSizeAttacker = Mathf.Clamp(Random.Range(spawnZoneSizeMin, spawnZoneSizeMax + 1), 1, Mathf.Min(width, height));
-        int spawnSizeDefender = Mathf.Clamp(Random.Range(spawnZoneSizeMin, spawnZoneSizeMax + 1), 1, Mathf.Min(width, height));
+        Vector2Int spawnSizeAttacker = RandomZoneSize(spawnZoneSizeMin, spawnZoneSizeMax);
+        Vector2Int spawnSizeDefender = RandomZoneSize(spawnZoneSizeMin, spawnZoneSizeMax);
 
-        int attackerHalf = spawnSizeAttacker / 2;
-        int defenderHalf = spawnSizeDefender / 2;
+        int attackerHalfX = spawnSizeAttacker.x / 2;
+        int attackerHalfZ = spawnSizeAttacker.y / 2;
+        int defenderHalfX = spawnSizeDefender.x / 2;
+        int defenderHalfZ = spawnSizeDefender.y / 2;
 
-        int attackerX = ResolveSpawnCenterX(spawnSizeAttacker);
-        int defenderX = ResolveSpawnCenterX(spawnSizeDefender);
+        int attackerX = ResolveSpawnCenterX(spawnSizeAttacker.x);
+        int defenderX = ResolveSpawnCenterX(spawnSizeDefender.x);
 
-        int attackerZ = innerPadding + attackerHalf;
-        int defenderZ = height - 1 - innerPadding - (spawnSizeDefender - defenderHalf - 1);
+        int attackerZ = innerPadding + attackerHalfZ;
+        int defenderZ = height - 1 - innerPadding - (spawnSizeDefender.y - defenderHalfZ - 1);
 
         attackerSpawn = new Vector2Int(attackerX, attackerZ);
         defenderSpawn = new Vector2Int(defenderX, defenderZ);
 
-        PaintZoneAroundCenter(attackerSpawn, attackerHalf, spawnSizeAttacker - attackerHalf, BlockType.Spawn);
-        PaintZoneAroundCenter(defenderSpawn, defenderHalf, spawnSizeDefender - defenderHalf, BlockType.Spawn);
+        PaintZoneAroundCenter(attackerSpawn, attackerHalfX, spawnSizeAttacker.x - attackerHalfX, attackerHalfZ, spawnSizeAttacker.y - attackerHalfZ, BlockType.Spawn);
+        PaintZoneAroundCenter(defenderSpawn, defenderHalfX, spawnSizeDefender.x - defenderHalfX, defenderHalfZ, spawnSizeDefender.y - defenderHalfZ, BlockType.Spawn);
     }
 
-    int ResolveSpawnCenterX(int spawnSize)
+    int ResolveSpawnCenterX(int spawnSizeX)
     {
-        int half = spawnSize / 2;
+        int half = spawnSizeX / 2;
         int xMin = innerPadding + half;
-        int xMax = width - 1 - innerPadding - (spawnSize - half - 1);
+        int xMax = width - 1 - innerPadding - (spawnSizeX - half - 1);
         if (xMax < xMin) xMax = xMin;
 
         int center = (width - 1) / 2;
@@ -51,18 +53,29 @@ public partial class MapGenerator
         return Random.Range(targetMin, targetMax + 1);
     }
 
+    // Случайный размер зоны: x и z генерируются независимо в диапазоне [min, max].
+    Vector2Int RandomZoneSize(int min, int max)
+    {
+        int lo = Mathf.Max(1, Mathf.Min(min, max));
+        int hi = Mathf.Max(lo, Mathf.Max(min, max));
+        int maxSide = Mathf.Min(width, height);
+        int sx = Mathf.Clamp(Random.Range(lo, hi + 1), 1, maxSide);
+        int sz = Mathf.Clamp(Random.Range(lo, hi + 1), 1, maxSide);
+        return new Vector2Int(sx, sz);
+    }
+
     void PlaceSiteZones()
     {
-        siteASize = Mathf.Clamp(Random.Range(siteZoneSizeMin, siteZoneSizeMax + 1), 1, Mathf.Min(width, height));
-        siteBSize = Mathf.Clamp(Random.Range(siteZoneSizeMin, siteZoneSizeMax + 1), 1, Mathf.Min(width, height));
+        siteASize = RandomZoneSize(siteZoneSizeMin, siteZoneSizeMax);
+        siteBSize = RandomZoneSize(siteZoneSizeMin, siteZoneSizeMax);
 
         int siteLineZ = ResolveSiteLineZ();
 
         siteA = ResolveSiteOrigin(leftHalf: true, siteASize, siteLineZ);
         siteB = ResolveSiteOrigin(leftHalf: false, siteBSize, siteLineZ);
 
-        PaintZoneByRect(siteA.x, siteA.y, siteASize, siteASize, BlockType.Site);
-        PaintZoneByRect(siteB.x, siteB.y, siteBSize, siteBSize, BlockType.Site);
+        PaintZoneByRect(siteA.x, siteA.y, siteASize.x, siteASize.y, BlockType.Site);
+        PaintZoneByRect(siteB.x, siteB.y, siteBSize.x, siteBSize.y, BlockType.Site);
     }
 
     int ResolveSiteLineZ()
@@ -73,19 +86,20 @@ public partial class MapGenerator
         return Mathf.RoundToInt(biasedZ);
     }
 
-    Vector2Int ResolveSiteOrigin(bool leftHalf, int siteSize, int lineZ)
+    Vector2Int ResolveSiteOrigin(bool leftHalf, Vector2Int siteSize, int lineZ)
     {
         int globalXMin = innerPadding;
-        int globalXMax = width - innerPadding - siteSize;
+        int globalXMax = width - innerPadding - siteSize.x;
         int mapCenter = (width - 1) / 2;
-        int minDistanceFromCenter = Mathf.Max(1, siteMinCenterDistanceMultiplier) * siteSize;
+        // Минимальная дистанция от центра карты для сайта пропорциональна его ширине.
+        int minDistanceFromCenter = Mathf.Max(1, siteMinCenterDistanceMultiplier) * siteSize.x;
         int drift = Mathf.Max(0, siteCenterDriftMax);
 
         int xMin;
         int xMax;
         if (leftHalf)
         {
-            int allowedMaxByDistance = mapCenter - minDistanceFromCenter - siteSize;
+            int allowedMaxByDistance = mapCenter - minDistanceFromCenter - siteSize.x;
             xMin = globalXMin;
             xMax = Mathf.Min(globalXMin + drift, allowedMaxByDistance);
             if (xMax < xMin)
@@ -111,9 +125,9 @@ public partial class MapGenerator
         int originX = Mathf.Clamp(Random.Range(xMin, xMax + 1), globalXMin, globalXMax);
 
         int verticalJitter = Mathf.Max(0, siteVerticalJitter);
-        int originZTarget = lineZ - siteSize / 2 + Random.Range(-verticalJitter, verticalJitter + 1);
+        int originZTarget = lineZ - siteSize.y / 2 + Random.Range(-verticalJitter, verticalJitter + 1);
         int globalZMin = innerPadding;
-        int globalZMax = height - innerPadding - siteSize;
+        int globalZMax = height - innerPadding - siteSize.y;
         int originZ = Mathf.Clamp(originZTarget, globalZMin, globalZMax);
 
         return new Vector2Int(originX, originZ);
@@ -124,8 +138,9 @@ public partial class MapGenerator
         if (!generateNeutralZone)
             return;
 
-        int sizeX = Mathf.Max(1, neutralZoneSize.x);
-        int sizeZ = Mathf.Max(1, neutralZoneSize.y);
+        neutralSize = RandomZoneSize(neutralZoneSizeMin, neutralZoneSizeMax);
+        int sizeX = neutralSize.x;
+        int sizeZ = neutralSize.y;
         int halfX = sizeX / 2;
         int halfZ = sizeZ / 2;
 
@@ -137,7 +152,8 @@ public partial class MapGenerator
         int mapCenterX = (width - 1) / 2;
         int mapCenterZ = (height - 1) / 2;
 
-        int sitesLineZ = (siteA.y + siteASize / 2 + siteB.y + siteBSize / 2) / 2;
+        // Линия сайтов считается по центрам зон с учётом размеров по Z.
+        int sitesLineZ = (siteA.y + siteASize.y / 2 + siteB.y + siteBSize.y / 2) / 2;
         float bias = Mathf.Clamp01(neutralZoneBiasToSites);
         int targetZ = Mathf.RoundToInt(Mathf.Lerp(mapCenterZ, sitesLineZ, bias));
 
@@ -169,12 +185,12 @@ public partial class MapGenerator
     {
         Vector2Int[] spawns = { attackerSpawn, defenderSpawn };
         Vector2Int[] sites = { siteA, siteB };
-        int[] siteSizes = { siteASize, siteBSize };
+        Vector2Int[] siteSizes = { siteASize, siteBSize };
         for (int i = 0; i < spawns.Length; i++)
         {
             for (int j = 0; j < sites.Length; j++)
             {
-                Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j], siteSizes[j], spawns[i]);
+                Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j].x, siteSizes[j].y, spawns[i]);
                 CreateConfiguredPath(spawns[i], endpoint, BlockType.Main);
             }
         }
@@ -212,10 +228,10 @@ public partial class MapGenerator
     void BuildNeutralToSiteLinks()
     {
         Vector2Int[] sites = { siteA, siteB };
-        int[] siteSizes = { siteASize, siteBSize };
+        Vector2Int[] siteSizes = { siteASize, siteBSize };
         for (int i = 0; i < sites.Length; i++)
         {
-            Vector2Int siteEntry = GetClosestEdgePoint(sites[i], siteSizes[i], siteSizes[i], neutralCenter);
+            Vector2Int siteEntry = GetClosestEdgePoint(sites[i], siteSizes[i].x, siteSizes[i].y, neutralCenter);
             CreateLinkConnection(neutralCenter, siteEntry);
         }
     }
@@ -294,13 +310,13 @@ public partial class MapGenerator
         }
     }
 
-    // Заполняет зону вокруг центра, учитывая ассиметрию полу-размеров (как у спавнов).
-    void PaintZoneAroundCenter(Vector2Int center, int halfBefore, int halfAfter, BlockType type)
+    // Заполняет зону вокруг центра, учитывая ассиметрию полу-размеров по X и Z раздельно.
+    void PaintZoneAroundCenter(Vector2Int center, int halfXBefore, int halfXAfter, int halfZBefore, int halfZAfter, BlockType type)
     {
-        int sizeX = Mathf.Max(1, halfBefore + halfAfter);
-        int sizeZ = sizeX;
-        int startX = center.x - halfBefore;
-        int startZ = center.y - halfBefore;
+        int sizeX = Mathf.Max(1, halfXBefore + halfXAfter);
+        int sizeZ = Mathf.Max(1, halfZBefore + halfZAfter);
+        int startX = center.x - halfXBefore;
+        int startZ = center.y - halfZBefore;
         PaintZoneByRect(startX, startZ, sizeX, sizeZ, type);
     }
 
@@ -336,9 +352,9 @@ public partial class MapGenerator
         return new Vector2Int(ClampGridX(closest.x), ClampGridZ(closest.y));
     }
 
-    Vector2Int GetSiteCenter(Vector2Int origin, int siteSize)
+    Vector2Int GetSiteCenter(Vector2Int origin, Vector2Int siteSize)
     {
-        return new Vector2Int(origin.x + siteSize / 2, origin.y + siteSize / 2);
+        return new Vector2Int(origin.x + siteSize.x / 2, origin.y + siteSize.y / 2);
     }
 
     int ManhattanDistance(Vector2Int a, Vector2Int b)

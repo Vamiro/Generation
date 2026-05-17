@@ -18,10 +18,12 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(0.01f), Tooltip("Размер одной клетки в мировых координатах.")] private float blockSize = 1f;
 
     [Header("Настройки зон")]
-    [SerializeField, Tooltip("Минимальный размер зоны спавна.")] private int spawnZoneSizeMin = 8;
-    [SerializeField, Tooltip("Максимальный размер зоны спавна.")] private int spawnZoneSizeMax = 10;
-    [SerializeField, Tooltip("Минимальный размер зоны сайта.")] private int siteZoneSizeMin = 4;
-    [SerializeField, Tooltip("Максимальный размер зоны сайта.")] private int siteZoneSizeMax = 6;
+    [SerializeField, Min(1), Tooltip("Минимальный размер зоны спавна по любой стороне (рандомится независимо по X и Z).")] private int spawnZoneSizeMin = 8;
+    [SerializeField, Min(1), Tooltip("Максимальный размер зоны спавна по любой стороне (рандомится независимо по X и Z).")] private int spawnZoneSizeMax = 10;
+    [SerializeField, Min(1), Tooltip("Минимальный размер зоны сайта по любой стороне (рандомится независимо по X и Z).")] private int siteZoneSizeMin = 4;
+    [SerializeField, Min(1), Tooltip("Максимальный размер зоны сайта по любой стороне (рандомится независимо по X и Z).")] private int siteZoneSizeMax = 6;
+    [SerializeField, Min(1), Tooltip("Минимальный размер нейтральной зоны по любой стороне (рандомится независимо по X и Z).")] private int neutralZoneSizeMin = 4;
+    [SerializeField, Min(1), Tooltip("Максимальный размер нейтральной зоны по любой стороне (рандомится независимо по X и Z).")] private int neutralZoneSizeMax = 6;
 
     [Header("Позиционирование зон")]
     [SerializeField, Min(0), Tooltip("Внутренний отступ от границы карты для размещения зон.")] private int innerPadding = 4;
@@ -65,9 +67,7 @@ public partial class MapGenerator : MonoBehaviour
 
     [Header("Нейтральная зона")]
     [FormerlySerializedAs("generateRoomZone")]
-    [SerializeField, Tooltip("Генерировать фиксированную нейтральную зону.")] private bool generateNeutralZone = true;
-    [FormerlySerializedAs("roomSize")]
-    [SerializeField, Tooltip("Размер нейтральной зоны.")] private Vector2Int neutralZoneSize = new Vector2Int(5, 5);
+    [SerializeField, Tooltip("Генерировать нейтральную зону.")] private bool generateNeutralZone = true;
     [SerializeField, Range(0f, 0.5f), Tooltip("Смещение центра нейтральной зоны по Z от центра карты к линии сайтов (доля расстояния).")] private float neutralZoneBiasToSites = 0.2f;
     [SerializeField, Min(0), Tooltip("Максимальный случайный сдвиг центра нейтральной зоны по X от центра карты.")] private int neutralZoneHorizontalJitter = 2;
     [SerializeField, Min(0), Tooltip("Максимальный случайный сдвиг центра нейтральной зоны по Z от смещённой линии.")] private int neutralZoneVerticalJitter = 1;
@@ -98,23 +98,16 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(1), Tooltip("Высота стен в блоках (количество уровней колонны).")] private int outerWallHeight = 2;
 
     [Header("Настройки укрытий")]
-    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = false;
-    [SerializeField, Tooltip("Общий множитель вероятности появления укрытий.")] private float coverSpawnMultiplier = 1f;
-    [SerializeField, Tooltip("Минимальная вероятность укрытия в spawn-зоне.")] private float coverMinProbabilitySpawn = 0.3f;
-    [SerializeField, Tooltip("Максимальная вероятность укрытия в spawn-зоне.")] private float coverMaxProbabilitySpawn = 0.6f;
-    [SerializeField, Tooltip("Минимальная вероятность укрытия в site-зоне.")] private float coverMinProbabilitySite = 0.2f;
-    [SerializeField, Tooltip("Максимальная вероятность укрытия в site-зоне.")] private float coverMaxProbabilitySite = 0.5f;
-    [SerializeField, Tooltip("Минимальная вероятность укрытия в main-зоне.")] private float coverMinProbabilityMain = 0.1f;
-    [SerializeField, Tooltip("Максимальная вероятность укрытия в main-зоне.")] private float coverMaxProbabilityMain = 0.8f;
-    [SerializeField, Tooltip("Минимальная вероятность укрытия в link-зоне.")] private float coverMinProbabilityLink = 0.1f;
-    [SerializeField, Tooltip("Максимальная вероятность укрытия в link-зоне.")] private float coverMaxProbabilityLink = 0.8f;
-    [FormerlySerializedAs("coverMinProbabilityRoom")]
-    [SerializeField, Tooltip("Минимальная вероятность укрытия в neutral-зоне.")] private float coverMinProbabilityNeutral = 0.5f;
-    [FormerlySerializedAs("coverMaxProbabilityRoom")]
-    [SerializeField, Tooltip("Максимальная вероятность укрытия в neutral-зоне.")] private float coverMaxProbabilityNeutral = 0.7f;
-    [SerializeField, Min(1), Tooltip("Порог ширины, ниже которого проход считается узким.")] private int narrowCorridorWidthThreshold = 2;
-    [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий в узких коридорах.")] private float narrowCorridorCoverMultiplier = 1.3f;
-    [SerializeField, Range(0.5f, 2f), Tooltip("Множитель вероятности укрытий на открытых участках.")] private float openAreaCoverMultiplier = 1.15f;
+    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = true;
+    [SerializeField, Tooltip("Зоны, в которых выполняется расстановка укрытий.")] private CoverableZones coverableZones = CoverableZones.SiteAndNeutral;
+    [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
+    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями (жёсткий потолок).")] private float coverMaxFillRatio = 0.25f;
+    [SerializeField, Min(0), Tooltip("Жёсткий лимит количества укрытий на одну зону. 0 — без лимита.")] private int coverMaxPerZone = 0;
+    [SerializeField, Min(1), Tooltip("Минимальное расстояние Чебышёва между двумя укрытиями.")] private int coverMinSpacing = 2;
+    [SerializeField, Range(1, 3), Tooltip("Сколько укрытий ставить максимум на одну ось атаки (входы↔центр, входы↔входы).")] private int coversPerAxis = 2;
+    [SerializeField, Min(1), Tooltip("На какой клетке от входа ставится первое 'pocket' укрытие. 2 = через 1 пустую клетку от входа.")] private int axisPocketDistance = 2;
+    [SerializeField, Range(0f, 1f), Tooltip("Вероятность сдвинуть укрытие на 1 клетку перпендикулярно оси (создаёт корнер-пик 'сбоку от линии').")] private float axisLateralOffsetChance = 0.6f;
+    [SerializeField, Tooltip("Включать оси 'вход↔вход' (через всю зону) дополнительно к 'вход↔центр'.")] private bool useEntranceToEntranceAxes = true;
 
     // Логическая сетка карты: тип каждой клетки. Empty = снаружи карты (нет ничего).
     private BlockType[,] cellTypes;
@@ -125,7 +118,9 @@ public partial class MapGenerator : MonoBehaviour
 
     private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
-    private int siteASize, siteBSize;
+    // Размеры зон по X и Z (Vector2Int.x — ширина, Vector2Int.y — высота).
+    private Vector2Int siteASize, siteBSize;
+    private Vector2Int neutralSize;
     private Vector2Int neutralCenter;
 
     // Словарь хранит уникальные блоки по зонам (без дублей).

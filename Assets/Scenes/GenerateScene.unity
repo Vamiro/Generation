@@ -343,7 +343,9 @@ MonoBehaviour:
   spawnZoneSizeMin: 6
   spawnZoneSizeMax: 7
   siteZoneSizeMin: 6
-  siteZoneSizeMax: 9
+  siteZoneSizeMax: 11
+  neutralZoneSizeMin: 5
+  neutralZoneSizeMax: 10
   innerPadding: 4
   spawnHorizontalOffset: 3
   siteLineBiasToDefender: 0.25
@@ -359,8 +361,8 @@ MonoBehaviour:
   attackerLinkOffsetJitter: 9
   defenderLinkOffsetFromCenter: 6
   useFixedSeed: 0
-  generationSeed: -874935757
-  currentGenerationSeed: 1368260024
+  generationSeed: 298493262
+  currentGenerationSeed: 2139567789
   astarMainHorizontalBias: 0.85
   astarLinkHorizontalBias: 0.15
   astarTurnPenalty: 0.35
@@ -368,10 +370,9 @@ MonoBehaviour:
   astarCrossTypePenalty: 2
   astarBorderPenalty: 2
   astarMainOuterBias: 0.35
-  astarLinkCenterPenalty: 1
+  astarLinkCenterPenalty: 0.1
   astarRandomJitter: 0.55
   generateNeutralZone: 1
-  neutralZoneSize: {x: 5, y: 5}
   neutralZoneBiasToSites: 0.314
   neutralZoneHorizontalJitter: 6
   neutralZoneVerticalJitter: 1
@@ -391,21 +392,14 @@ MonoBehaviour:
   entranceFillMode: 0
   outerWallThickness: 2
   outerWallHeight: 2
-  enableCovers: 0
-  coverSpawnMultiplier: 0.4
-  coverMinProbabilitySpawn: 0.3
-  coverMaxProbabilitySpawn: 0.6
-  coverMinProbabilitySite: 0.2
-  coverMaxProbabilitySite: 0.5
-  coverMinProbabilityMain: 0.1
-  coverMaxProbabilityMain: 0.8
-  coverMinProbabilityLink: 0.1
-  coverMaxProbabilityLink: 0.8
-  coverMinProbabilityNeutral: 0.5
-  coverMaxProbabilityNeutral: 0.7
-  narrowCorridorWidthThreshold: 2
-  narrowCorridorCoverMultiplier: 1.3
-  openAreaCoverMultiplier: 1.15
+  enableCovers: 1
+  coverableZones: 3
+  coverHeight: 1
+  coverMaxFillRatio: 0.25
+  coverMaxPerZone: 0
+  coverMinCoverage: 2
+  coverMinSpacing: 2
+  coverRandomBias: 0.15
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0
