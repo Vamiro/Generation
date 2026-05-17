@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Random = UnityEngine.Random;
@@ -203,7 +204,9 @@ public partial class MapGenerator
         for (int j = 0; j < sites.Length; j++)
         {
             Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j].x, siteSizes[j].y, spawn);
-            List<Vector2Int> path = CreateConfiguredPath(spawn, endpoint, BlockType.Main);
+            List<Vector2Int> path = BuildPathWithWaypoints(
+                spawn, endpoint, BlockType.Main,
+                mainWaypointCount.Random(), mainWaypointOffset.Random());
             if (path != null && path.Count > 0)
                 outPaths.Add(path);
         }
@@ -211,18 +214,19 @@ public partial class MapGenerator
 
     void BuildAttackerLinks()
     {
-        // Link ответвляется от каждого main-пути атакующего.
-        // Точка ответвления = attackerLinkBranchFraction * длина пути от спавна.
-        // Чем меньше значение, тем раньше игрок может уйти с main на mid.
-        float fraction = Mathf.Clamp(attackerLinkBranch.Random(), 0.1f, 0.9f);
+        // Каждый link получает независимое случайное значение branch-point.
+        // Это гарантирует, что два link атакующего (к сайту A и к сайту B)
+        // ответвляются в разных местах и не совпадают визуально.
         foreach (List<Vector2Int> mainPath in attackerMainPaths)
         {
             if (mainPath == null || mainPath.Count < 4)
                 continue;
 
+            float fraction = Mathf.Clamp(attackerLinkBranch.Random(), 0.1f, 0.9f);
             int branchIdx = Mathf.Clamp(Mathf.RoundToInt(mainPath.Count * fraction), 1, mainPath.Count - 1);
             Vector2Int branchPoint = mainPath[branchIdx];
-            List<Vector2Int> link = CreateLinkConnectionFromSpawnLine(branchPoint, neutralCenter);
+
+            List<Vector2Int> link = BuildLinkWithWaypoints(branchPoint, neutralCenter);
             if (link != null && link.Count > 0)
                 linkPaths.Add(link);
         }
@@ -230,22 +234,95 @@ public partial class MapGenerator
 
     void BuildDefenderLink()
     {
-        // Защитник ответвляется с main ближе к своему сайту (высокая доля пути).
-        // Это делает его mid-маршрут короче — стандартное тактическое преимущество защитника в Valorant.
         if (defenderMainPaths == null || defenderMainPaths.Count == 0)
             return;
 
-        float fraction = Mathf.Clamp(defenderLinkBranch.Random(), 0.1f, 0.95f);
-        // Ответвляемся от одного случайного пути защитника (или первого для воспроизводимости).
         List<Vector2Int> mainPath = defenderMainPaths[Random.Range(0, defenderMainPaths.Count)];
         if (mainPath == null || mainPath.Count < 4)
             return;
 
+        float fraction = Mathf.Clamp(defenderLinkBranch.Random(), 0.1f, 0.95f);
         int branchIdx = Mathf.Clamp(Mathf.RoundToInt(mainPath.Count * fraction), 1, mainPath.Count - 1);
         Vector2Int branchPoint = mainPath[branchIdx];
-        List<Vector2Int> link = CreateLinkConnectionFromSpawnLine(branchPoint, neutralCenter);
+
+        List<Vector2Int> link = BuildLinkWithWaypoints(branchPoint, neutralCenter);
         if (link != null && link.Count > 0)
             linkPaths.Add(link);
+    }
+
+    List<Vector2Int> BuildLinkWithWaypoints(Vector2Int from, Vector2Int to)
+    {
+        int wps = linkWaypointCount.Random();
+        int offset = linkWaypointOffset.Random();
+        return BuildPathWithWaypoints(from, to, BlockType.Link, wps, offset,
+            paintSkipPredicate: IsSpawnOrMainCell);
+    }
+
+    // Строит путь с промежуточными waypoints для органичных изгибов.
+    // Каждый waypoint смещён перпендикулярно прямой линии from→to на случайную величину.
+    // Каждый сегмент решается отдельным вызовом A*, что даёт визуально естественные
+    // изгибы типа Valorant без изменения cost-функций A*.
+    List<Vector2Int> BuildPathWithWaypoints(
+        Vector2Int from,
+        Vector2Int to,
+        BlockType type,
+        int waypointCount,
+        int maxPerpOffset,
+        Func<Vector2Int, bool> paintSkipPredicate = null)
+    {
+        List<Vector2Int> checkpoints = new() { from };
+
+        if (waypointCount > 0)
+            checkpoints.AddRange(GenerateWaypoints(from, to, waypointCount, maxPerpOffset));
+
+        checkpoints.Add(to);
+
+        List<Vector2Int> fullPath = new();
+        for (int i = 0; i < checkpoints.Count - 1; i++)
+        {
+            // Первый сегмент может иметь paintSkipPredicate (например, не красить спавн/main).
+            // Последующие — обычный проход.
+            Func<Vector2Int, bool> predicate = (i == 0) ? paintSkipPredicate : null;
+            List<Vector2Int> segment = CreateConfiguredPath(
+                checkpoints[i], checkpoints[i + 1], type, predicate);
+
+            if (segment == null || segment.Count == 0)
+                continue;
+
+            // Пропускаем первую точку сегмента (кроме самого первого) чтобы не дублировать стыки.
+            int startFrom = (fullPath.Count > 0 && segment.Count > 1) ? 1 : 0;
+            for (int k = startFrom; k < segment.Count; k++)
+                fullPath.Add(segment[k]);
+        }
+
+        return fullPath.Count > 0 ? fullPath : null;
+    }
+
+    // Генерирует промежуточные waypoints между from и to.
+    // Точки равномерно распределены по длине пути и смещены перпендикулярно.
+    List<Vector2Int> GenerateWaypoints(Vector2Int from, Vector2Int to, int count, int maxOffset)
+    {
+        List<Vector2Int> wps = new();
+        Vector2 dir = ((Vector2)(to - from)).normalized;
+        // Перпендикуляр: поворот на 90°.
+        Vector2Int perp = new Vector2Int(Mathf.RoundToInt(-dir.y), Mathf.RoundToInt(dir.x));
+        if (perp == Vector2Int.zero)
+            perp = new Vector2Int(0, 1);
+
+        for (int i = 1; i <= count; i++)
+        {
+            float t = (float)i / (count + 1);
+            int baseX = Mathf.RoundToInt(Mathf.Lerp(from.x, to.x, t));
+            int baseZ = Mathf.RoundToInt(Mathf.Lerp(from.y, to.y, t));
+
+            int offset = maxOffset > 0 ? Random.Range(-maxOffset, maxOffset + 1) : 0;
+
+            int wpX = Mathf.Clamp(baseX + perp.x * offset, innerPadding, width - 1 - innerPadding);
+            int wpZ = Mathf.Clamp(baseZ + perp.y * offset, innerPadding, height - 1 - innerPadding);
+            wps.Add(new Vector2Int(wpX, wpZ));
+        }
+
+        return wps;
     }
 
     void BuildNeutralToSiteLinks()
@@ -255,7 +332,7 @@ public partial class MapGenerator
         for (int i = 0; i < sites.Length; i++)
         {
             Vector2Int siteEntry = GetClosestEdgePoint(sites[i], siteSizes[i].x, siteSizes[i].y, neutralCenter);
-            List<Vector2Int> link = CreateLinkConnection(neutralCenter, siteEntry);
+            List<Vector2Int> link = BuildLinkWithWaypoints(neutralCenter, siteEntry);
             if (link != null && link.Count > 0)
                 linkPaths.Add(link);
         }

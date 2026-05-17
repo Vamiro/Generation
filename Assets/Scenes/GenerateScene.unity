@@ -366,12 +366,24 @@ MonoBehaviour:
   defenderLinkBranch:
     min: 0.1
     max: 0.4
-  useFixedSeed: 0
-  generationSeed: 298493262
-  currentGenerationSeed: 2139567789
+  mainWaypointCount:
+    min: 1
+    max: 1
+  mainWaypointOffset:
+    min: 2
+    max: 4
+  linkWaypointCount:
+    min: 0
+    max: 1
+  linkWaypointOffset:
+    min: 1
+    max: 3
+  useFixedSeed: 1
+  generationSeed: 764228756
+  currentGenerationSeed: 764228756
   astarMainHorizontalBias: 0.85
   astarLinkHorizontalBias: 0.15
-  astarTurnPenalty: 0
+  astarTurnPenalty: 0.28
   astarRoadReusePenalty: 1.5
   astarCrossTypePenalty: 2
   astarBorderPenalty: 2

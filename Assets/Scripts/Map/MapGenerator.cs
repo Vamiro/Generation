@@ -41,6 +41,12 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Tooltip("Диапазон доли пути, в которой ответвляется link атакующего (0 = у спавна, 1 = у сайта). Каждый раз берётся случайное значение из диапазона.")] private FloatRange attackerLinkBranch = new FloatRange(0.25f, 0.42f);
     [SerializeField, Tooltip("Диапазон доли пути, в которой ответвляется link защитника (0 = у спавна, 1 = у сайта). Защитник ответвляется ближе к своему сайту — его mid-путь короче.")] private FloatRange defenderLinkBranch = new FloatRange(0.60f, 0.80f);
 
+    [Header("Органичность дорог (waypoints)")]
+    [SerializeField, Tooltip("Количество промежуточных точек на main-дороге. 0 = прямая линия, 1-2 = органичный изгиб как в Valorant.")] private IntRange mainWaypointCount = new IntRange(1, 1);
+    [SerializeField, Tooltip("Максимальное перпендикулярное смещение waypoint от прямой линии (в клетках). Больше = сильнее изгиб.")] private IntRange mainWaypointOffset = new IntRange(2, 4);
+    [SerializeField, Tooltip("Количество промежуточных точек на link-дороге. 0 = прямая, 1 = мягкий изгиб.")] private IntRange linkWaypointCount = new IntRange(0, 1);
+    [SerializeField, Tooltip("Максимальное перпендикулярное смещение waypoint link-дороги (в клетках).")] private IntRange linkWaypointOffset = new IntRange(1, 3);
+
     [Header("Сид генерации")]
     [SerializeField, Tooltip("Использовать фиксированный seed вместо случайного.")] private bool useFixedSeed;
     [SerializeField, Tooltip("Seed генерации, если включен фиксированный seed.")] private int generationSeed = 42;
