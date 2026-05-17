@@ -29,7 +29,7 @@ public partial class MapGenerator
         public int AlongAxis;
     }
 
-    // Окружает Spawn, Site и Neutral зоны стенами с ограниченными входами.
+    // Окружает Spawn, Site, Neutral и Room зоны стенами с ограниченными входами.
     void ShapeZoneEnclosures()
     {
         if (!enableZoneEnclosures)
@@ -39,6 +39,8 @@ public partial class MapGenerator
         ShapeZoneTypeEnclosures(BlockType.Site);
         if (generateNeutralZone)
             ShapeZoneTypeEnclosures(BlockType.Neutral);
+        if (enableRooms)
+            ShapeZoneTypeEnclosures(BlockType.Room);
     }
 
     void ShapeZoneTypeEnclosures(BlockType zoneType)

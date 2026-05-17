@@ -87,6 +87,14 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Tooltip("Материал для стен.")] private Material wallMaterial;
     [FormerlySerializedAs("roomMaterial")]
     [SerializeField, Tooltip("Материал для нейтральной зоны.")] private Material neutralMaterial;
+    [SerializeField, Tooltip("Материал для комнат (галереи, ниши вдоль дорог).")] private Material roomMaterial;
+
+    [Header("Комнаты")]
+    [SerializeField, Tooltip("Генерировать комнаты-галереи вдоль main-дорог.")] private bool enableRooms = true;
+    [SerializeField, Range(0, 3), Tooltip("Максимальное количество галерей на одну main-дорогу.")] private int roomsPerMainRoad = 1;
+    [SerializeField, Min(2), Tooltip("Минимальный размер комнаты по любой стороне (клеток).")] private int roomSizeMin = 3;
+    [SerializeField, Min(2), Tooltip("Максимальный размер комнаты по любой стороне (клеток).")] private int roomSizeMax = 5;
+    [SerializeField, Min(1), Tooltip("Отступ комнаты от края дороги по перпендикуляру (клеток).")] private int roomOffsetFromRoad = 1;
 
     [Header("Структурирование зон")]
     [SerializeField, Tooltip("Окружать Site и Neutral зоны стенами с ограниченными входами после построения дорог.")] private bool enableZoneEnclosures = true;
@@ -98,7 +106,7 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(1), Tooltip("Высота стен в блоках (количество уровней колонны).")] private int outerWallHeight = 2;
 
     [Header("Настройки укрытий")]
-    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = true;
+    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = false;
     [SerializeField, Tooltip("Зоны, в которых выполняется расстановка укрытий.")] private CoverableZones coverableZones = CoverableZones.SiteAndNeutral;
     [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
     [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями (жёсткий потолок).")] private float coverMaxFillRatio = 0.25f;
@@ -115,6 +123,8 @@ public partial class MapGenerator : MonoBehaviour
     private BlockComponent[,] floorInstances;
     // Веса клеток (нужны Main для прогрессии вдоль пути и потенциально для covers).
     private int[,] cellWeights;
+    // Пути main-дорог (заполняется в BuildMainRoutes, читается в PlaceRooms).
+    private List<List<Vector2Int>> mainRoadPaths = new();
 
     private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
@@ -132,7 +142,8 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Site,
         BlockType.Main,
         BlockType.Link,
-        BlockType.Neutral
+        BlockType.Neutral,
+        BlockType.Room
     };
 
     private static readonly BlockType[] CoverZones =
@@ -150,7 +161,8 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Site,
         BlockType.Main,
         BlockType.Link,
-        BlockType.Neutral
+        BlockType.Neutral,
+        BlockType.Room
     };
 
     private int nextZoneId;
@@ -211,7 +223,10 @@ public partial class MapGenerator : MonoBehaviour
         // Разметка зон (Спавны, Сайты, Main, Link, Neutral) — рисуем "по живому", создаём пол под помеченными клетками.
         MarkZones();
 
-        // Окружаем Site/Neutral/Spawn стенами и сужаем входы (choke points)
+        // Размещаем комнаты-галереи вдоль main-дорог (до ShapeZoneEnclosures, чтобы входы в комнаты тоже сужались)
+        PlaceRooms();
+
+        // Окружаем Site/Neutral/Spawn/Room стенами и сужаем входы (choke points)
         ShapeZoneEnclosures();
 
         ValidateGeneratedLayout();
@@ -245,6 +260,7 @@ public partial class MapGenerator : MonoBehaviour
         cellTypes = new BlockType[width, height];
         floorInstances = new BlockComponent[width, height];
         cellWeights = new int[width, height];
+        mainRoadPaths.Clear();
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
@@ -314,6 +330,8 @@ public partial class MapGenerator : MonoBehaviour
                 return roadMaterial;
             case BlockType.Neutral:
                 return neutralMaterial;
+            case BlockType.Room:
+                return roomMaterial;
             default:
                 return null;
         }
@@ -397,10 +415,10 @@ public partial class MapGenerator : MonoBehaviour
         if (!IsInsideMap(x, z))
             return false;
 
-        // Имитация приоритетов BlockData.Set: запрещаем перезапись Spawn/Site/Neutral дорогами/Road.
+        // Приоритеты: Spawn/Site/Neutral нельзя перезаписать дорогами и комнатами.
         BlockType currentType = cellTypes[x, z];
         if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
-            (type == BlockType.Main || type == BlockType.Link || type == BlockType.Road))
+            (type == BlockType.Main || type == BlockType.Link || type == BlockType.Road || type == BlockType.Room))
         {
             return false;
         }

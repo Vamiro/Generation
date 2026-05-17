@@ -37,7 +37,7 @@ public class BlockData
     {
         // Если текущий тип – Spawn/Site/Neutral, запрещаем смену на Main, Link или Road
         if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
-            (newType == BlockType.Main || newType == BlockType.Link || newType == BlockType.Road))
+            (newType == BlockType.Main || newType == BlockType.Link || newType == BlockType.Road || newType == BlockType.Room))
         {
             return;
         }

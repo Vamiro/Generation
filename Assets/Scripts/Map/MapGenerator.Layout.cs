@@ -191,7 +191,9 @@ public partial class MapGenerator
             for (int j = 0; j < sites.Length; j++)
             {
                 Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j].x, siteSizes[j].y, spawns[i]);
-                CreateConfiguredPath(spawns[i], endpoint, BlockType.Main);
+                List<Vector2Int> path = CreateConfiguredPath(spawns[i], endpoint, BlockType.Main);
+                if (path != null && path.Count > 0)
+                    mainRoadPaths.Add(path);
             }
         }
     }

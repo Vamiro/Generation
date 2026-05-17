@@ -142,6 +142,9 @@ public partial class MapGenerator
             case BlockType.Neutral:
                 zoneComponent = zoneObject.AddComponent<NeutralZoneComponent>();
                 break;
+            case BlockType.Room:
+                zoneComponent = zoneObject.AddComponent<RoomZoneComponent>();
+                break;
             default:
                 Destroy(zoneObject);
                 return null;

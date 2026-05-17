@@ -208,7 +208,7 @@ Transform:
   m_GameObject: {fileID: 689928811}
   serializedVersion: 2
   m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 100, y: 50, z: 100}
+  m_LocalPosition: {x: 80, y: 50, z: 80}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -387,6 +387,12 @@ MonoBehaviour:
   floorMaterial: {fileID: 2100000, guid: 221a7748d9526ee41979a27d9302c862, type: 2}
   wallMaterial: {fileID: 2100000, guid: 0eece8546e0a519468a9dbec5bbf6dd8, type: 2}
   neutralMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
+  roomMaterial: {fileID: 2100000, guid: 0b571b0b94de14ba8a1cb9708f4eb74e, type: 2}
+  enableRooms: 1
+  roomsPerMainRoad: 1
+  roomSizeMin: 3
+  roomSizeMax: 5
+  roomOffsetFromRoad: 1
   enableZoneEnclosures: 1
   maxEntranceWidth: 2
   entranceFillMode: 0
@@ -397,9 +403,11 @@ MonoBehaviour:
   coverHeight: 1
   coverMaxFillRatio: 0.25
   coverMaxPerZone: 0
-  coverMinCoverage: 2
   coverMinSpacing: 2
-  coverRandomBias: 0.15
+  coversPerAxis: 2
+  axisPocketDistance: 2
+  axisLateralOffsetChance: 0.6
+  useEntranceToEntranceAxes: 1
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0
