@@ -134,10 +134,13 @@ Spawn, Site, Neutral, Main, Link, Road, Room
 **Внутренние поля `MapGenerator`:**
 
 ```csharp
-BlockType[,]      cellTypes        // логическая сетка (источник истины)
-BlockComponent[,] floorInstances   // лениво создаваемые GameObject-ы пола
-int[,]            cellWeights      // веса клеток (для A*)
-List<List<Vector2Int>> mainRoadPaths  // A*-пути main-дорог, заполняется в BuildMainRoutes, читается в PlaceRooms
+BlockType[,]      cellTypes          // логическая сетка (источник истины)
+BlockComponent[,] floorInstances     // лениво создаваемые GameObject-ы пола
+int[,]            cellWeights        // веса клеток (для A*)
+List<List<Vector2Int>> mainRoadPaths    // все main-пути (attacker + defender), для PlaceRooms
+List<List<Vector2Int>> attackerMainPaths // main-пути атакующего, для branch-точек link
+List<List<Vector2Int>> defenderMainPaths // main-пути защитника, для branch-точки link
+List<List<Vector2Int>> linkPaths         // link/mid пути, для link-кубби
 Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый доступ к клеткам зоны
 ```
 
@@ -174,6 +177,32 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
 ```
 
 ### 4.3 Слой Layout (`MapGenerator.Layout.cs`)
+
+Размечает зоны и дороги.
+
+**Структура путей (после изменений):**
+
+```
+BuildMainRoutes
+  ├── attackerSpawn → siteA  (→ attackerMainPaths[0])
+  ├── attackerSpawn → siteB  (→ attackerMainPaths[1])
+  ├── defenderSpawn → siteA  (→ defenderMainPaths[0])
+  └── defenderSpawn → siteB  (→ defenderMainPaths[1])
+
+BuildAttackerLinks
+  └── [attackerMainPaths[i][branchIdx]] → neutralCenter  (ответвление, аналог mid на Valorant)
+      branchIdx = attackerLinkBranchFraction * path.Count  (по умолчанию ~33%)
+
+BuildDefenderLink
+  └── [defenderMainPaths[rand][branchIdx]] → neutralCenter
+      branchIdx = defenderLinkBranchFraction * path.Count  (по умолчанию ~70% = ближе к сайту → короткий mid)
+
+BuildNeutralToSiteLinks
+  ├── neutralCenter → edge(siteA)
+  └── neutralCenter → edge(siteB)
+```
+
+**Тактический смысл ответвления от main:** атакующий должен пройти ~33% main до точки ответвления. Защитник ответвляется на ~70% своего пути (т.е. рядом со своим сайтом → его mid-маршрут короче). Это воспроизводит стандартное тактическое преимущество защитника по таймингу mid-контроля в Valorant.
 
 Размечает зоны и дороги.
 

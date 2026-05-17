@@ -3,35 +3,52 @@ using UnityEngine;
 
 public partial class MapGenerator
 {
-    // Размещает комнаты двух типов:
-    //  - Gallery: посередине main-дороги, ломает long sight-line.
-    //  - Pre-site: у входа в сайт (аналог Hookah/Showers в Valorant),
+    // Размещает комнаты трёх типов:
+    //  - Gallery (Тип А): посередине main-дороги, ломает long sight-line.
+    //  - Pre-site (Тип Б): у входа в сайт (аналог Hookah/Showers в Valorant),
     //    создаёт staging area для атакующих и off-site hold для защитников.
+    //  - Cubby (Тип В): маленькая ниша на link/mid-дороге, позиция для info-gathering.
     void PlaceRooms()
     {
-        if (!enableRooms || mainRoadPaths == null || mainRoadPaths.Count == 0)
+        if (!enableRooms)
             return;
 
-        int sizeMin = Mathf.Max(2, roomSizeMin);
-        int sizeMax = Mathf.Max(sizeMin, roomSizeMax);
         int offset = Mathf.Max(1, roomOffsetFromRoad);
-        int galleriesPerRoad = Mathf.Max(0, roomsPerMainRoad);
 
-        int preSizeMin = Mathf.Max(2, preSiteRoomSizeMin);
-        int preSizeMax = Mathf.Max(preSizeMin, preSiteRoomSizeMax);
-
-        foreach (List<Vector2Int> path in mainRoadPaths)
+        // Главные дороги: галереи и pre-site.
+        if (mainRoadPaths != null)
         {
-            if (path == null || path.Count < 8)
-                continue;
+            int sizeMin = Mathf.Max(2, roomSizeMin);
+            int sizeMax = Mathf.Max(sizeMin, roomSizeMax);
+            int preSizeMin = Mathf.Max(2, preSiteRoomSizeMin);
+            int preSizeMax = Mathf.Max(preSizeMin, preSiteRoomSizeMax);
 
-            // Тип А: галерея в средней части пути (25%–65%).
-            if (galleriesPerRoad > 0)
-                TryPlaceRoomsInRange(path, galleriesPerRoad, 0.25f, 0.65f, sizeMin, sizeMax, offset);
+            foreach (List<Vector2Int> path in mainRoadPaths)
+            {
+                if (path == null || path.Count < 8)
+                    continue;
 
-            // Тип Б: pre-site комната у конца пути (70%–88%) — staging area перед сайтом.
-            if (enablePreSiteRooms)
-                TryPlaceRoomsInRange(path, 1, 0.70f, 0.88f, preSizeMin, preSizeMax, offset);
+                if (roomsPerMainRoad > 0)
+                    TryPlaceRoomsInRange(path, roomsPerMainRoad, 0.25f, 0.65f, sizeMin, sizeMax, offset);
+
+                if (enablePreSiteRooms)
+                    TryPlaceRoomsInRange(path, 1, 0.70f, 0.88f, preSizeMin, preSizeMax, offset);
+            }
+        }
+
+        // Link/mid дороги: кубби.
+        if (enableLinkRooms && linkPaths != null)
+        {
+            int cubMin = Mathf.Max(1, linkRoomSizeMin);
+            int cubMax = Mathf.Max(cubMin, linkRoomSizeMax);
+
+            foreach (List<Vector2Int> path in linkPaths)
+            {
+                if (path == null || path.Count < 6)
+                    continue;
+
+                TryPlaceRoomsInRange(path, 1, 0.40f, 0.60f, cubMin, cubMax, offset);
+            }
         }
     }
 

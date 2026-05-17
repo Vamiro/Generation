@@ -183,48 +183,67 @@ public partial class MapGenerator
 
     void BuildMainRoutes()
     {
-        Vector2Int[] spawns = { attackerSpawn, defenderSpawn };
-        Vector2Int[] sites = { siteA, siteB };
-        Vector2Int[] siteSizes = { siteASize, siteBSize };
-        for (int i = 0; i < spawns.Length; i++)
+        // Пути атакующего (spawn[0] → siteA, spawn[0] → siteB).
+        BuildTeamMainPaths(attackerSpawn, new[] { siteA, siteB }, new[] { siteASize, siteBSize },
+            attackerMainPaths);
+        // Пути защитника (spawn[1] → siteA, spawn[1] → siteB).
+        BuildTeamMainPaths(defenderSpawn, new[] { siteA, siteB }, new[] { siteASize, siteBSize },
+            defenderMainPaths);
+
+        // mainRoadPaths — объединение для использования в PlaceRooms.
+        mainRoadPaths.AddRange(attackerMainPaths);
+        mainRoadPaths.AddRange(defenderMainPaths);
+    }
+
+    void BuildTeamMainPaths(Vector2Int spawn, Vector2Int[] sites, Vector2Int[] siteSizes,
+        List<List<Vector2Int>> outPaths)
+    {
+        for (int j = 0; j < sites.Length; j++)
         {
-            for (int j = 0; j < sites.Length; j++)
-            {
-                Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j].x, siteSizes[j].y, spawns[i]);
-                List<Vector2Int> path = CreateConfiguredPath(spawns[i], endpoint, BlockType.Main);
-                if (path != null && path.Count > 0)
-                    mainRoadPaths.Add(path);
-            }
+            Vector2Int endpoint = GetClosestEdgePoint(sites[j], siteSizes[j].x, siteSizes[j].y, spawn);
+            List<Vector2Int> path = CreateConfiguredPath(spawn, endpoint, BlockType.Main);
+            if (path != null && path.Count > 0)
+                outPaths.Add(path);
         }
     }
 
     void BuildAttackerLinks()
     {
-        int mapCenterX = (width - 1) / 2;
-        int baseOffset = Mathf.Max(1, attackerLinkOffsetFromCenter);
-        int jitter = Mathf.Max(0, attackerLinkOffsetJitter);
+        // Link ответвляется от каждого main-пути атакующего.
+        // Точка ответвления = attackerLinkBranchFraction * длина пути от спавна.
+        // Чем меньше значение, тем раньше игрок может уйти с main на mid.
+        float fraction = Mathf.Clamp(attackerLinkBranchFraction, 0.1f, 0.9f);
+        foreach (List<Vector2Int> mainPath in attackerMainPaths)
+        {
+            if (mainPath == null || mainPath.Count < 4)
+                continue;
 
-        int leftOffset = baseOffset + Random.Range(-jitter, jitter + 1);
-        int rightOffset = baseOffset + Random.Range(-jitter, jitter + 1);
-
-        int leftX = ClampGridX(mapCenterX - leftOffset);
-        int rightX = ClampGridX(mapCenterX + rightOffset);
-
-        Vector2Int leftStart = new Vector2Int(leftX, ClampGridZ(attackerSpawn.y));
-        Vector2Int rightStart = new Vector2Int(rightX, ClampGridZ(attackerSpawn.y));
-
-        CreateLinkConnectionFromSpawnLine(leftStart, neutralCenter);
-        CreateLinkConnectionFromSpawnLine(rightStart, neutralCenter);
+            int branchIdx = Mathf.Clamp(Mathf.RoundToInt(mainPath.Count * fraction), 1, mainPath.Count - 1);
+            Vector2Int branchPoint = mainPath[branchIdx];
+            List<Vector2Int> link = CreateLinkConnectionFromSpawnLine(branchPoint, neutralCenter);
+            if (link != null && link.Count > 0)
+                linkPaths.Add(link);
+        }
     }
 
     void BuildDefenderLink()
     {
-        int mapCenterX = (width - 1) / 2;
-        int jitter = Mathf.Max(0, defenderLinkOffsetFromCenter);
-        int x = ClampGridX(mapCenterX + Random.Range(-jitter, jitter + 1));
+        // Защитник ответвляется с main ближе к своему сайту (высокая доля пути).
+        // Это делает его mid-маршрут короче — стандартное тактическое преимущество защитника в Valorant.
+        if (defenderMainPaths == null || defenderMainPaths.Count == 0)
+            return;
 
-        Vector2Int start = new Vector2Int(x, ClampGridZ(defenderSpawn.y));
-        CreateLinkConnectionFromSpawnLine(start, neutralCenter);
+        float fraction = Mathf.Clamp(defenderLinkBranchFraction, 0.1f, 0.95f);
+        // Ответвляемся от одного случайного пути защитника (или первого для воспроизводимости).
+        List<Vector2Int> mainPath = defenderMainPaths[Random.Range(0, defenderMainPaths.Count)];
+        if (mainPath == null || mainPath.Count < 4)
+            return;
+
+        int branchIdx = Mathf.Clamp(Mathf.RoundToInt(mainPath.Count * fraction), 1, mainPath.Count - 1);
+        Vector2Int branchPoint = mainPath[branchIdx];
+        List<Vector2Int> link = CreateLinkConnectionFromSpawnLine(branchPoint, neutralCenter);
+        if (link != null && link.Count > 0)
+            linkPaths.Add(link);
     }
 
     void BuildNeutralToSiteLinks()
@@ -234,7 +253,9 @@ public partial class MapGenerator
         for (int i = 0; i < sites.Length; i++)
         {
             Vector2Int siteEntry = GetClosestEdgePoint(sites[i], siteSizes[i].x, siteSizes[i].y, neutralCenter);
-            CreateLinkConnection(neutralCenter, siteEntry);
+            List<Vector2Int> link = CreateLinkConnection(neutralCenter, siteEntry);
+            if (link != null && link.Count > 0)
+                linkPaths.Add(link);
         }
     }
 

@@ -41,9 +41,8 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(0), Tooltip("Базовая толщина основных путей.")] private int mainWidth = 1;
     [SerializeField, Min(0), Tooltip("Базовая толщина фланговых путей.")] private int linkWidth = 1;
     [SerializeField, Tooltip("Использовать круговую кисть при расширении толщины дороги.")] private bool useCircularPathBrush = false;
-    [SerializeField, Min(1), Tooltip("Базовое смещение link-точки атакующего по X от центра карты (расстояние между двумя link).")] private int attackerLinkOffsetFromCenter = 4;
-    [SerializeField, Min(0), Tooltip("Случайный jitter X-смещения link-точки атакующего относительно базового смещения.")] private int attackerLinkOffsetJitter = 2;
-    [SerializeField, Min(0), Tooltip("Максимальный сдвиг link-точки защитника по X от центра карты.")] private int defenderLinkOffsetFromCenter = 2;
+    [SerializeField, Range(0.1f, 0.6f), Tooltip("Позиция ответвления link-пути атакующего от main: 0 = у спавна, 1 = у сайта. Рекомендуется 0.25–0.40 — link отходит в начале маршрута.")] private float attackerLinkBranchFraction = 0.33f;
+    [SerializeField, Range(0.4f, 0.95f), Tooltip("Позиция ответвления link-пути защитника от main: 0 = у спавна, 1 = у сайта. Защитник ответвляется ближе к своему сайту — его mid-путь короче (тактическое преимущество).")] private float defenderLinkBranchFraction = 0.70f;
 
     [Header("Сид генерации")]
     [SerializeField, Tooltip("Использовать фиксированный seed вместо случайного.")] private bool useFixedSeed;
@@ -98,6 +97,9 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Tooltip("Генерировать pre-site комнату перед каждым входом в сайт (аналог Hookah/Showers в Valorant).")] private bool enablePreSiteRooms = true;
     [SerializeField, Min(2), Tooltip("Минимальный размер pre-site комнаты (клеток).")] private int preSiteRoomSizeMin = 2;
     [SerializeField, Min(2), Tooltip("Максимальный размер pre-site комнаты (клеток).")] private int preSiteRoomSizeMax = 4;
+    [SerializeField, Tooltip("Генерировать кубби (маленькие ниши) вдоль link/mid-дорог — позиции для информации и фланков.")] private bool enableLinkRooms = true;
+    [SerializeField, Min(1), Tooltip("Минимальный размер кубби на link-дороге (клеток). Обычно 1–2.")] private int linkRoomSizeMin = 1;
+    [SerializeField, Min(1), Tooltip("Максимальный размер кубби на link-дороге (клеток). Обычно 2–3.")] private int linkRoomSizeMax = 2;
 
     [Header("Структурирование зон")]
     [SerializeField, Tooltip("Окружать Site и Neutral зоны стенами с ограниченными входами после построения дорог.")] private bool enableZoneEnclosures = true;
@@ -128,6 +130,11 @@ public partial class MapGenerator : MonoBehaviour
     private int[,] cellWeights;
     // Пути main-дорог (заполняется в BuildMainRoutes, читается в PlaceRooms).
     private List<List<Vector2Int>> mainRoadPaths = new();
+    // Пути main-дорог по команде — нужны для ответвления Link.
+    private List<List<Vector2Int>> attackerMainPaths = new();
+    private List<List<Vector2Int>> defenderMainPaths = new();
+    // Пути link-дорог — нужны для комнат на mid/link.
+    private List<List<Vector2Int>> linkPaths = new();
 
     private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
@@ -264,6 +271,9 @@ public partial class MapGenerator : MonoBehaviour
         floorInstances = new BlockComponent[width, height];
         cellWeights = new int[width, height];
         mainRoadPaths.Clear();
+        attackerMainPaths.Clear();
+        defenderMainPaths.Clear();
+        linkPaths.Clear();
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
