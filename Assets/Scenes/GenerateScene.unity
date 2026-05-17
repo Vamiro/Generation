@@ -340,12 +340,15 @@ MonoBehaviour:
   width: 80
   height: 80
   blockSize: 2
-  spawnZoneSizeMin: 6
-  spawnZoneSizeMax: 7
-  siteZoneSizeMin: 6
-  siteZoneSizeMax: 11
-  neutralZoneSizeMin: 5
-  neutralZoneSizeMax: 10
+  spawnZoneSize:
+    min: 8
+    max: 10
+  siteZoneSize:
+    min: 4
+    max: 6
+  neutralZoneSize:
+    min: 4
+    max: 6
   innerPadding: 4
   spawnHorizontalOffset: 3
   siteLineBiasToDefender: 0.25
@@ -357,21 +360,24 @@ MonoBehaviour:
   mainWidth: 2
   linkWidth: 1
   useCircularPathBrush: 1
-  attackerLinkOffsetFromCenter: 9
-  attackerLinkOffsetJitter: 9
-  defenderLinkOffsetFromCenter: 6
+  attackerLinkBranch:
+    min: 0.2
+    max: 0.8
+  defenderLinkBranch:
+    min: 0.1
+    max: 0.4
   useFixedSeed: 0
   generationSeed: 298493262
   currentGenerationSeed: 2139567789
   astarMainHorizontalBias: 0.85
   astarLinkHorizontalBias: 0.15
-  astarTurnPenalty: 0.35
+  astarTurnPenalty: 0
   astarRoadReusePenalty: 1.5
   astarCrossTypePenalty: 2
   astarBorderPenalty: 2
-  astarMainOuterBias: 0.35
-  astarLinkCenterPenalty: 0.1
-  astarRandomJitter: 0.55
+  astarMainOuterBias: 0.1
+  astarLinkCenterPenalty: 0
+  astarRandomJitter: 0
   generateNeutralZone: 1
   neutralZoneBiasToSites: 0.314
   neutralZoneHorizontalJitter: 6
@@ -390,9 +396,18 @@ MonoBehaviour:
   roomMaterial: {fileID: 2100000, guid: 0b571b0b94de14ba8a1cb9708f4eb74e, type: 2}
   enableRooms: 1
   roomsPerMainRoad: 1
-  roomSizeMin: 3
-  roomSizeMax: 5
+  roomSize:
+    min: 3
+    max: 5
   roomOffsetFromRoad: 1
+  enablePreSiteRooms: 1
+  preSiteRoomSize:
+    min: 2
+    max: 4
+  enableLinkRooms: 1
+  linkRoomSize:
+    min: 1
+    max: 2
   enableZoneEnclosures: 1
   maxEntranceWidth: 2
   entranceFillMode: 0

@@ -12,8 +12,8 @@ public partial class MapGenerator
 {
     void PlaceSpawnZones()
     {
-        Vector2Int spawnSizeAttacker = RandomZoneSize(spawnZoneSizeMin, spawnZoneSizeMax);
-        Vector2Int spawnSizeDefender = RandomZoneSize(spawnZoneSizeMin, spawnZoneSizeMax);
+        Vector2Int spawnSizeAttacker = RandomZoneSize(spawnZoneSize);
+        Vector2Int spawnSizeDefender = RandomZoneSize(spawnZoneSize);
 
         int attackerHalfX = spawnSizeAttacker.x / 2;
         int attackerHalfZ = spawnSizeAttacker.y / 2;
@@ -54,6 +54,8 @@ public partial class MapGenerator
     }
 
     // Случайный размер зоны: x и z генерируются независимо в диапазоне [min, max].
+    Vector2Int RandomZoneSize(IntRange range) => RandomZoneSize(range.min, range.max);
+
     Vector2Int RandomZoneSize(int min, int max)
     {
         int lo = Mathf.Max(1, Mathf.Min(min, max));
@@ -66,8 +68,8 @@ public partial class MapGenerator
 
     void PlaceSiteZones()
     {
-        siteASize = RandomZoneSize(siteZoneSizeMin, siteZoneSizeMax);
-        siteBSize = RandomZoneSize(siteZoneSizeMin, siteZoneSizeMax);
+        siteASize = RandomZoneSize(siteZoneSize);
+        siteBSize = RandomZoneSize(siteZoneSize);
 
         int siteLineZ = ResolveSiteLineZ();
 
@@ -138,7 +140,7 @@ public partial class MapGenerator
         if (!generateNeutralZone)
             return;
 
-        neutralSize = RandomZoneSize(neutralZoneSizeMin, neutralZoneSizeMax);
+        neutralSize = RandomZoneSize(neutralZoneSize);
         int sizeX = neutralSize.x;
         int sizeZ = neutralSize.y;
         int halfX = sizeX / 2;
@@ -212,7 +214,7 @@ public partial class MapGenerator
         // Link ответвляется от каждого main-пути атакующего.
         // Точка ответвления = attackerLinkBranchFraction * длина пути от спавна.
         // Чем меньше значение, тем раньше игрок может уйти с main на mid.
-        float fraction = Mathf.Clamp(attackerLinkBranchFraction, 0.1f, 0.9f);
+        float fraction = Mathf.Clamp(attackerLinkBranch.Random(), 0.1f, 0.9f);
         foreach (List<Vector2Int> mainPath in attackerMainPaths)
         {
             if (mainPath == null || mainPath.Count < 4)
@@ -233,7 +235,7 @@ public partial class MapGenerator
         if (defenderMainPaths == null || defenderMainPaths.Count == 0)
             return;
 
-        float fraction = Mathf.Clamp(defenderLinkBranchFraction, 0.1f, 0.95f);
+        float fraction = Mathf.Clamp(defenderLinkBranch.Random(), 0.1f, 0.95f);
         // Ответвляемся от одного случайного пути защитника (или первого для воспроизводимости).
         List<Vector2Int> mainPath = defenderMainPaths[Random.Range(0, defenderMainPaths.Count)];
         if (mainPath == null || mainPath.Count < 4)

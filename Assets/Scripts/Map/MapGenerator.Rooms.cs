@@ -18,10 +18,10 @@ public partial class MapGenerator
         // Главные дороги: галереи и pre-site.
         if (mainRoadPaths != null)
         {
-            int sizeMin = Mathf.Max(2, roomSizeMin);
-            int sizeMax = Mathf.Max(sizeMin, roomSizeMax);
-            int preSizeMin = Mathf.Max(2, preSiteRoomSizeMin);
-            int preSizeMax = Mathf.Max(preSizeMin, preSiteRoomSizeMax);
+            int sizeMin = Mathf.Max(2, roomSize.min);
+            int sizeMax = Mathf.Max(sizeMin, roomSize.max);
+            int preSizeMin = Mathf.Max(2, preSiteRoomSize.min);
+            int preSizeMax = Mathf.Max(preSizeMin, preSiteRoomSize.max);
 
             foreach (List<Vector2Int> path in mainRoadPaths)
             {
@@ -39,8 +39,8 @@ public partial class MapGenerator
         // Link/mid дороги: кубби.
         if (enableLinkRooms && linkPaths != null)
         {
-            int cubMin = Mathf.Max(1, linkRoomSizeMin);
-            int cubMax = Mathf.Max(cubMin, linkRoomSizeMax);
+            int cubMin = Mathf.Max(1, linkRoomSize.min);
+            int cubMax = Mathf.Max(cubMin, linkRoomSize.max);
 
             foreach (List<Vector2Int> path in linkPaths)
             {
