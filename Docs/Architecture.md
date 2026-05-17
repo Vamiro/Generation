@@ -235,19 +235,34 @@ A* с учётом штрафов и предпочтений.
 6. Регистрирует в `MapManager`.
 7. **`AssignRoadTargets`**: каждой дороге назначается ближайший сайт (`roadToSite`). Если для какого-то сайта нет дорог конкретного типа — fallback на ближайшую любого типа.
 
-### 4.8 Слой Covers (`MapGenerator.Covers.cs`)
+### 4.8 Слой Rooms (`MapGenerator.Rooms.cs`)
 
-**Сейчас в открытой переработке.** Подход на момент написания этого документа — «оси атаки» (entrance → center, entrance → entrance) с pocket+mid позициями и латеральным сдвигом. Будет переписан после внедрения комнат (см. roadmap в `thesis-context.mdc`).
+`PlaceRooms()` размещает комнаты двух типов вдоль main-дорог:
+
+**Тип А — Gallery (25%–65% пути):** прямоугольная выпуклость перпендикулярно дороге. Ломает длинный sight-line на main-коридоре. Аналог mid-галерей.
+
+**Тип Б — Pre-site room (70%–88% пути):** небольшая комната у входа в сайт. Staging area для атакующих, off-site hold для защитников. Аналог Hookah/Showers в Valorant.
+
+Параметры: `enableRooms`, `roomsPerMainRoad`, `roomSizeMin/Max`, `roomOffsetFromRoad`, `enablePreSiteRooms`, `preSiteRoomSizeMin/Max`.
+
+Инварианты `CanPlaceRoom`: комната не может перекрывать Spawn/Site/Neutral/Wall, и должна быть минимум `outerWallThickness` клеток от края карты (гарантия места для внешней стены).
+
+### 4.9 Слой Covers (`MapGenerator.Covers.cs`)
+
+**Сейчас отключён** (`enableCovers = false` по умолчанию). Будет переписан после финализации комнат (см. roadmap).
 
 Параметры (могут меняться):
 - `enableCovers`, `coverableZones` (Site / Neutral / Spawn), `coverHeight`, `coverMaxFillRatio`, `coverMaxPerZone`, `coverMinSpacing`, плюс параметры конкретного алгоритма.
 
-### 4.9 Внешние стены (`MapGenerator.cs`)
+### 4.10 Внешние стены (`MapGenerator.cs`)
 
-`BuildOuterWalls()`:
-1. Стартовый «фронт» — все непустые клетки.
-2. На каждой из `outerWallThickness` итераций: соседи фронта типа `Empty` помечаются как `Wall` и становятся новым фронтом.
-3. После расширения проходим по всем Wall-клеткам и создаём колонну блоков высотой `outerWallHeight` (уровни 0..H−1).
+`BuildOuterWalls()` — трёхфазный алгоритм:
+
+**Фаза 1 — Контурный обход:** для каждой Floor-клетки (не Empty, не Wall) смотрим 4 соседа. Если сосед Empty → помечаем его как Wall. Если сосед **за краем карты** → ставим Wall на соседе в противоположном направлении (внутри карты). Это гарантирует стену даже если зона вплотную к краю.
+
+**Фаза 2 — Утолщение:** flood-fill ещё `outerWallThickness - 1` слоёв от контурных Wall-клеток, включая choke-стены от ShapeZoneEnclosures.
+
+**Фаза 3 — Колонны:** по всем Wall-клеткам создаём физические блоки высотой `outerWallHeight` (уровни 0..H−1).
 
 Параметры: `outerWallThickness`, `outerWallHeight`.
 

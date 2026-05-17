@@ -91,10 +91,13 @@ public partial class MapGenerator : MonoBehaviour
 
     [Header("Комнаты")]
     [SerializeField, Tooltip("Генерировать комнаты-галереи вдоль main-дорог.")] private bool enableRooms = true;
-    [SerializeField, Range(0, 3), Tooltip("Максимальное количество галерей на одну main-дорогу.")] private int roomsPerMainRoad = 1;
-    [SerializeField, Min(2), Tooltip("Минимальный размер комнаты по любой стороне (клеток).")] private int roomSizeMin = 3;
-    [SerializeField, Min(2), Tooltip("Максимальный размер комнаты по любой стороне (клеток).")] private int roomSizeMax = 5;
+    [SerializeField, Range(0, 3), Tooltip("Максимальное количество галерей на одну main-дорогу (посередине пути).")] private int roomsPerMainRoad = 1;
+    [SerializeField, Min(2), Tooltip("Минимальный размер галереи по любой стороне (клеток).")] private int roomSizeMin = 3;
+    [SerializeField, Min(2), Tooltip("Максимальный размер галереи по любой стороне (клеток).")] private int roomSizeMax = 5;
     [SerializeField, Min(1), Tooltip("Отступ комнаты от края дороги по перпендикуляру (клеток).")] private int roomOffsetFromRoad = 1;
+    [SerializeField, Tooltip("Генерировать pre-site комнату перед каждым входом в сайт (аналог Hookah/Showers в Valorant).")] private bool enablePreSiteRooms = true;
+    [SerializeField, Min(2), Tooltip("Минимальный размер pre-site комнаты (клеток).")] private int preSiteRoomSizeMin = 2;
+    [SerializeField, Min(2), Tooltip("Максимальный размер pre-site комнаты (клеток).")] private int preSiteRoomSizeMax = 4;
 
     [Header("Структурирование зон")]
     [SerializeField, Tooltip("Окружать Site и Neutral зоны стенами с ограниченными входами после построения дорог.")] private bool enableZoneEnclosures = true;
@@ -337,29 +340,66 @@ public partial class MapGenerator : MonoBehaviour
         }
     }
 
-    // Возводит внешние стены вокруг "острова" пола толщиной outerWallThickness и высотой outerWallHeight.
-    // Алгоритм: расширение слоями. На каждой итерации все Empty-клетки, имеющие соседа из предыдущего "фронта",
-    // помечаются как Wall и становятся фронтом для следующей итерации.
+    // Возводит внешние стены вокруг "острова" пола.
+    // Алгоритм двухфазный:
+    //  Фаза 1 — "обвести контур": для каждой Floor-клетки у которой сосед — Empty или за
+    //           краем карты, ставим Wall на ближайшей внутренней Empty-клетке в том направлении.
+    //           Это гарантирует, что стена появляется ВСЕГДА — даже если зона вплотную к краю.
+    //  Фаза 2 — "утолщение": классический flood-fill outward ещё (outerWallThickness-1) слоёв.
+    //  Фаза 3 — создаём физические колонны для всех Wall-клеток.
     void BuildOuterWalls()
     {
         int thickness = Mathf.Max(1, outerWallThickness);
-        int height_ = Mathf.Max(1, outerWallHeight);
+        int wallHeight = Mathf.Max(1, outerWallHeight);
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
 
-        // Изначальный фронт — все непустые клетки (зоны/дороги/уже расставленные стены).
-        List<Vector2Int> currentFront = new();
+        // Фаза 1: обход контура. Каждая Floor-клетка "просматривает" 4 стороны.
+        // Если соседняя ячейка Empty — она становится Wall.
+        // Если соседняя ячейка за краем карты — значит Floor-клетка сама находится
+        // у границы: ставим Wall на единственной возможной позиции (другой сосед в обратном направлении).
+        // Результат: Floor никогда не окажется с "голой" стороной у края карты.
+        List<Vector2Int> contourWalls = new();
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
             {
-                if (cellTypes[x, z] != BlockType.Empty)
-                    currentFront.Add(new Vector2Int(x, z));
+                if (cellTypes[x, z] == BlockType.Empty || cellTypes[x, z] == BlockType.Wall)
+                    continue;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    int nx = x + dx[i];
+                    int nz = z + dz[i];
+
+                    if (IsInsideMap(nx, nz))
+                    {
+                        // Обычный случай: Empty-сосед → ставим стену там.
+                        if (cellTypes[nx, nz] == BlockType.Empty)
+                        {
+                            cellTypes[nx, nz] = BlockType.Wall;
+                            contourWalls.Add(new Vector2Int(nx, nz));
+                        }
+                    }
+                    else
+                    {
+                        // Сосед вне карты: Floor вплотную к краю. Стену ставить некуда снаружи,
+                        // поэтому ищем противоположного соседа-Empty внутри карты и ставим там.
+                        int ox = x - dx[i];
+                        int oz = z - dz[i];
+                        if (IsInsideMap(ox, oz) && cellTypes[ox, oz] == BlockType.Empty)
+                        {
+                            cellTypes[ox, oz] = BlockType.Wall;
+                            contourWalls.Add(new Vector2Int(ox, oz));
+                        }
+                    }
+                }
             }
         }
 
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
-
-        for (int layer = 0; layer < thickness; layer++)
+        // Фаза 2: flood-fill для утолщения стены. Первый слой уже заложен в Фазе 1.
+        List<Vector2Int> currentFront = contourWalls;
+        for (int layer = 1; layer < thickness; layer++)
         {
             List<Vector2Int> nextFront = new();
             foreach (Vector2Int cell in currentFront)
@@ -370,7 +410,6 @@ public partial class MapGenerator : MonoBehaviour
                     int nz = cell.y + dz[i];
                     if (!IsInsideMap(nx, nz))
                         continue;
-
                     if (cellTypes[nx, nz] != BlockType.Empty)
                         continue;
 
@@ -384,15 +423,44 @@ public partial class MapGenerator : MonoBehaviour
                 break;
         }
 
-        // Возводим колонны для всех Wall-клеток (включая внутренние стены choke points).
-        for (int x = 0; x < width; x++)
+        // Кроме того, инициализируем фронт из ранее поставленных внутренних стен
+        // (ShapeZoneEnclosures) — чтобы вокруг choke-стен тоже выросли внешние слои.
+        if (thickness > 1)
         {
-            for (int z = 0; z < height; z++)
+            List<Vector2Int> existingWalls = new();
+            for (int x = 0; x < width; x++)
+                for (int z = 0; z < height; z++)
+                    if (cellTypes[x, z] == BlockType.Wall && !contourWalls.Contains(new Vector2Int(x, z)))
+                        existingWalls.Add(new Vector2Int(x, z));
+
+            currentFront = existingWalls;
+            for (int layer = 1; layer < thickness; layer++)
             {
-                if (cellTypes[x, z] == BlockType.Wall)
-                    CreateWallColumn(x, z, height_);
+                List<Vector2Int> nextFront = new();
+                foreach (Vector2Int cell in currentFront)
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        int nx = cell.x + dx[i];
+                        int nz = cell.y + dz[i];
+                        if (!IsInsideMap(nx, nz)) continue;
+                        if (cellTypes[nx, nz] != BlockType.Empty) continue;
+
+                        cellTypes[nx, nz] = BlockType.Wall;
+                        nextFront.Add(new Vector2Int(nx, nz));
+                    }
+                }
+
+                currentFront = nextFront;
+                if (currentFront.Count == 0) break;
             }
         }
+
+        // Фаза 3: строим физические колонны для всех Wall-клеток.
+        for (int x = 0; x < width; x++)
+            for (int z = 0; z < height; z++)
+                if (cellTypes[x, z] == BlockType.Wall)
+                    CreateWallColumn(x, z, wallHeight);
     }
 
     // Колонна стены строится с уровня 0 (вместо пола) на levels блоков вверх.

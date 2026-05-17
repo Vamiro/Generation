@@ -3,9 +3,10 @@ using UnityEngine;
 
 public partial class MapGenerator
 {
-    // Размещает комнаты-галереи вдоль main-дорог.
-    // Галерея — прямоугольная выпуклость, расположенная перпендикулярно дороге
-    // в её средней части. Ломает длинные sight-line и создаёт карманы для пика/держания.
+    // Размещает комнаты двух типов:
+    //  - Gallery: посередине main-дороги, ломает long sight-line.
+    //  - Pre-site: у входа в сайт (аналог Hookah/Showers в Valorant),
+    //    создаёт staging area для атакующих и off-site hold для защитников.
     void PlaceRooms()
     {
         if (!enableRooms || mainRoadPaths == null || mainRoadPaths.Count == 0)
@@ -14,40 +15,51 @@ public partial class MapGenerator
         int sizeMin = Mathf.Max(2, roomSizeMin);
         int sizeMax = Mathf.Max(sizeMin, roomSizeMax);
         int offset = Mathf.Max(1, roomOffsetFromRoad);
-        int perRoad = Mathf.Max(0, roomsPerMainRoad);
+        int galleriesPerRoad = Mathf.Max(0, roomsPerMainRoad);
+
+        int preSizeMin = Mathf.Max(2, preSiteRoomSizeMin);
+        int preSizeMax = Mathf.Max(preSizeMin, preSiteRoomSizeMax);
 
         foreach (List<Vector2Int> path in mainRoadPaths)
         {
             if (path == null || path.Count < 8)
                 continue;
 
-            TryPlaceRoomsOnPath(path, perRoad, sizeMin, sizeMax, offset);
+            // Тип А: галерея в средней части пути (25%–65%).
+            if (galleriesPerRoad > 0)
+                TryPlaceRoomsInRange(path, galleriesPerRoad, 0.25f, 0.65f, sizeMin, sizeMax, offset);
+
+            // Тип Б: pre-site комната у конца пути (70%–88%) — staging area перед сайтом.
+            if (enablePreSiteRooms)
+                TryPlaceRoomsInRange(path, 1, 0.70f, 0.88f, preSizeMin, preSizeMax, offset);
         }
     }
 
-    void TryPlaceRoomsOnPath(List<Vector2Int> path, int count, int sizeMin, int sizeMax, int offset)
+    void TryPlaceRoomsInRange(
+        List<Vector2Int> path,
+        int count,
+        float rangeStart,
+        float rangeEnd,
+        int sizeMin,
+        int sizeMax,
+        int offset)
     {
-        // Пропускаем первые и последние 25% пути (слишком близко к спавну/сайту).
-        int skipCells = Mathf.CeilToInt(path.Count * 0.25f);
-        int rangeStart = skipCells;
-        int rangeEnd = path.Count - 1 - skipCells;
+        int idxStart = Mathf.CeilToInt(path.Count * rangeStart);
+        int idxEnd = Mathf.FloorToInt(path.Count * rangeEnd);
 
-        if (rangeEnd <= rangeStart)
+        if (idxEnd <= idxStart)
             return;
 
-        // Набор уже занятых зон пути — чтобы комнаты не слипались.
         List<int> placedAt = new();
         int maxAttempts = count * 6;
 
         for (int attempt = 0; attempt < maxAttempts && placedAt.Count < count; attempt++)
         {
-            int idx = Random.Range(rangeStart, rangeEnd + 1);
+            int idx = Random.Range(idxStart, idxEnd + 1);
 
-            // Комнаты не должны стоять слишком близко друг к другу.
             if (IsTooCloseToPlaced(idx, placedAt, sizeMax + 2))
                 continue;
 
-            // Ширина (вдоль дороги) и глубина (перпендикулярно).
             int roomWidth = Random.Range(sizeMin, sizeMax + 1);
             int roomDepth = Random.Range(sizeMin, sizeMax + 1);
 
@@ -57,20 +69,16 @@ public partial class MapGenerator
     }
 
     // Пробует поставить галерею в точке path[idx].
-    // Пробует обе перпендикулярные стороны; возвращает true если удалось.
+    // Определяет направление дороги, пробует обе перпендикулярные стороны.
     bool TryPlaceGallery(List<Vector2Int> path, int idx, int roomWidth, int roomDepth, int offset)
     {
         Vector2Int dir = GetPathDirection(path, idx);
         bool isHorizontal = Mathf.Abs(dir.x) >= Mathf.Abs(dir.y);
 
-        // Два перпендикулярных направления от дороги.
-        // Для горизонтальной дороги (вдоль X) — перпендикуляр по Z.
-        // Для вертикальной дороги (вдоль Z) — перпендикуляр по X.
         Vector2Int perpA = isHorizontal ? new Vector2Int(0, 1) : new Vector2Int(1, 0);
         Vector2Int perpB = -perpA;
-
-        // Случайный порядок: пробуем обе стороны.
         Vector2Int[] perps = Random.value < 0.5f ? new[] { perpA, perpB } : new[] { perpB, perpA };
+
         Vector2Int roadCell = path[idx];
 
         foreach (Vector2Int perp in perps)
@@ -78,7 +86,6 @@ public partial class MapGenerator
             int rx, rz, rw, rh;
             if (isHorizontal)
             {
-                // Дорога горизонтальная → комната тянется по Z.
                 rw = roomWidth;
                 rh = roomDepth;
                 rx = roadCell.x - roomWidth / 2;
@@ -88,7 +95,6 @@ public partial class MapGenerator
             }
             else
             {
-                // Дорога вертикальная → комната тянется по X.
                 rw = roomDepth;
                 rh = roomWidth;
                 rx = perp.x > 0
@@ -107,17 +113,27 @@ public partial class MapGenerator
         return false;
     }
 
-    // Проверяет, что прямоугольник целиком внутри карты и не перекрывает защищённые зоны.
+    // Проверяет, что прямоугольник:
+    // - целиком внутри карты
+    // - с буфером outerWallThickness от краёв карты (чтобы всегда было место для стены)
+    // - не перекрывает Spawn/Site/Neutral/Wall
     bool CanPlaceRoom(int startX, int startZ, int sizeX, int sizeZ)
     {
         if (sizeX <= 0 || sizeZ <= 0)
             return false;
+
+        int wallBuffer = Mathf.Max(1, outerWallThickness);
 
         for (int x = startX; x < startX + sizeX; x++)
         {
             for (int z = startZ; z < startZ + sizeZ; z++)
             {
                 if (!IsInsideMap(x, z))
+                    return false;
+
+                // Буфер от края карты — иначе внешняя стена не сможет образоваться.
+                if (x < wallBuffer || x >= width - wallBuffer ||
+                    z < wallBuffer || z >= height - wallBuffer)
                     return false;
 
                 BlockType t = cellTypes[x, z];
@@ -130,7 +146,7 @@ public partial class MapGenerator
         return true;
     }
 
-    // Направление пути в точке idx — смотрим на несколько клеток вперёд/назад для сглаживания.
+    // Направление пути в точке idx — усредненное по ±2 клетки для сглаживания.
     Vector2Int GetPathDirection(List<Vector2Int> path, int idx)
     {
         int ahead = Mathf.Min(idx + 2, path.Count - 1);
@@ -142,10 +158,8 @@ public partial class MapGenerator
     bool IsTooCloseToPlaced(int idx, List<int> placed, int minGap)
     {
         foreach (int p in placed)
-        {
             if (Mathf.Abs(idx - p) < minGap)
                 return true;
-        }
         return false;
     }
 }
