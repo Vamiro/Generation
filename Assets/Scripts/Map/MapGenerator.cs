@@ -111,16 +111,23 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(1), Tooltip("Высота стен в блоках (количество уровней колонны).")] private int outerWallHeight = 2;
 
     [Header("Настройки укрытий")]
-    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = false;
-    [SerializeField, Tooltip("Зоны, в которых выполняется расстановка укрытий.")] private CoverableZones coverableZones = CoverableZones.SiteAndNeutral;
+    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = true;
+    [SerializeField, Tooltip("Зоны, в которых выполняется расстановка укрытий.")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
     [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
-    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями (жёсткий потолок).")] private float coverMaxFillRatio = 0.25f;
-    [SerializeField, Min(0), Tooltip("Жёсткий лимит количества укрытий на одну зону. 0 — без лимита.")] private int coverMaxPerZone = 0;
+
+    [Header("Укрытия — веса и видимость")]
+    [SerializeField, Min(1), Tooltip("Минимальный счётчик входов, из которых клетка должна просматриваться, чтобы стать кандидатом. 1 = любая видимость, 2 = должна быть видна минимум из двух входов.")] private int coverMinEntranceVisibility = 1;
+    [SerializeField, Range(0f, 1f), Tooltip("Случайный шум, добавляемый к весу клетки. 0 = детерминировано, 1 = высокая вариативность между генерациями.")] private float coverRandomBias = 0.2f;
+    [SerializeField, Min(0), Tooltip("Запрет постановки укрытия в N клетках от входа (чтобы не перекрывать сам проход). 0 = не запрещать.")] private int coverEntranceForbiddenRadius = 1;
+
+    [Header("Укрытия — двойные блоки")]
+    [SerializeField, Tooltip("Вероятность постановки двойного укрытия (2 клетки рядом). При 0 — только одиночные. При 1 — всегда двойные если есть подходящий сосед.")] private FloatRange coverMultiCellChance = new FloatRange(0.25f, 0.45f);
+    [SerializeField, Min(1), Tooltip("Минимальный вес соседней клетки, чтобы она стала второй частью двойного укрытия.")] private int coverMultiCellNeighborMinWeight = 1;
+
+    [Header("Укрытия — ограничения")]
+    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями.")] private float coverMaxFillRatio = 0.25f;
+    [SerializeField, Min(0), Tooltip("Жёсткий лимит укрытий на одну зону. 0 — без лимита.")] private int coverMaxPerZone = 0;
     [SerializeField, Min(1), Tooltip("Минимальное расстояние Чебышёва между двумя укрытиями.")] private int coverMinSpacing = 2;
-    [SerializeField, Range(1, 3), Tooltip("Сколько укрытий ставить максимум на одну ось атаки (входы↔центр, входы↔входы).")] private int coversPerAxis = 2;
-    [SerializeField, Min(1), Tooltip("На какой клетке от входа ставится первое 'pocket' укрытие. 2 = через 1 пустую клетку от входа.")] private int axisPocketDistance = 2;
-    [SerializeField, Range(0f, 1f), Tooltip("Вероятность сдвинуть укрытие на 1 клетку перпендикулярно оси (создаёт корнер-пик 'сбоку от линии').")] private float axisLateralOffsetChance = 0.6f;
-    [SerializeField, Tooltip("Включать оси 'вход↔вход' (через всю зону) дополнительно к 'вход↔центр'.")] private bool useEntranceToEntranceAxes = true;
 
     // Логическая сетка карты: тип каждой клетки. Empty = снаружи карты (нет ничего).
     private BlockType[,] cellTypes;
