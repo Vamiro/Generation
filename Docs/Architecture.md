@@ -62,8 +62,9 @@
 ```
 Assets/Scripts/
 ├── Core/
-│   ├── GameManager.cs           — раунд, тайминги, перезапуск, метрики
-│   ├── MatchManager.cs          — спавн/остановка матча по хоткеям W/S  ← NEW
+│   ├── GameManager.cs           — сбор метрики смертей (DeathData), Save On Quit
+│   ├── MatchManager.cs          — match loop, скорость симуляции, headless-режим, хоткеи W/S/H/[/]
+│   ├── MatchStats.cs            — MatchStatsCollector (MonoSingleton) + StatsData (JSON)  ← NEW
 │   ├── Storage.cs               — JSON I/O в persistentDataPath
 │   └── StorageData.cs           — обобщённая база для сохраняемых данных
 │
@@ -176,7 +177,11 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
 [7] UpdateMap                        — выставляет материалы полам
 [8] BuildOuterWalls                  — расширение Empty-границы вокруг floor на outerWallThickness;
                                        все Wall-клетки → колонны блоков высотой outerWallHeight в Geometry/
-[9] PlaceCovers (если enableCovers)  — расстановка укрытий внутри зон в Geometry/
+[9] PlaceCovers (если enableCovers)  — расстановка укрытий внутри зон в Geometry/.
+                                       Заполняет общее поле coverOccupancy[,].
+[9.5] RefreshZoneSamplePointsAfterCovers — пересобирает samplePoints зарегистрированных
+                                       MapZoneComponent-ов, исключая клетки с укрытиями
+                                       (чтобы боты не спавнились внутри блока укрытия).
 [10] RebuildNavMesh                  — runtime-бейк NavMeshSurface на Geometry/  ← NEW
 ```
 
@@ -324,6 +329,11 @@ A* с учётом штрафов и предпочтений.
 Параметры (могут меняться):
 - `enableCovers`, `coverableZones` (Site / Neutral / Spawn), `coverHeight`, `coverMaxFillRatio`, `coverMaxPerZone`, `coverMinSpacing`, плюс параметры конкретного алгоритма.
 
+**Карта занятости (`coverOccupancy[,]`):**
+- Заполняется в `PlaceCovers` (тот же буфер, что внутренний `hasCover`). Поле `MapGenerator`, видно наружу через `IsCellOccupiedByCover(x, z)`.
+- Используется `RuntimeZones.BuildSamplePoints` для исключения клеток с укрытиями из `MapZoneComponent.samplePoints`. Это гарантирует, что `bot.MoveToZone(zone)` / `MatchManager.SpawnBots` не выберут точку прямо в блоке укрытия.
+- Edge case: если зона полностью покрыта укрытиями, `BuildSamplePoints` fallback-ит на весь регион (иначе `GetRandomPointInZone()` упал бы на пустом списке).
+
 ### 4.10 Внешние стены (`MapGenerator.cs`)
 
 `BuildOuterWalls()` — трёхфазный алгоритм:
@@ -424,11 +434,19 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 - `maxMatches` — лимит серии (0 = бесконечно). По достижении — цикл выключается сам.
 
 **Скорость симуляции (live-управление):**
-- `simulationSpeed` (Range 0.1–20, default 1.0) — множитель `Time.timeScale`. Применяется каждый кадр в `Update`, поэтому ползунок в инспекторе работает в Play Mode мгновенно. `OnValidate` также применяет значение сразу. Программный доступ — `MatchManager.Instance.SetSimulationSpeed(x)` / `SimulationSpeed`.
+- `simulationSpeed` (Range 0.1–**50**, default 1.0) — множитель `Time.timeScale`. Применяется каждый кадр в `Update`, поэтому ползунок в инспекторе работает в Play Mode мгновенно. `OnValidate` также применяет значение сразу. Программный доступ — `MatchManager.Instance.SetSimulationSpeed(x)` / `SimulationSpeed`. Реальный потолок зависит от CPU.
 - `scaleFixedDeltaTime` (default true) — автоматически масштабирует `Time.fixedDeltaTime` пропорционально скорости. Это сохраняет частоту FixedUpdate в реальном времени (физика/боты остаются плавными при 5×–10×). При false — FixedUpdate вызывается чаще, увеличивая CPU-нагрузку, но боты «думают» чаще per-game-second.
 - `simulationSpeedStep` + `enableSpeedHotkeys` — хоткеи в Play Mode: `[` уменьшает скорость на шаг, `]` увеличивает, `\` сбрасывает к 1.0.
 - При `OnDisable` `MatchManager` восстанавливает `Time.timeScale = 1` и `Time.fixedDeltaTime` к запомненному при `Awake` значению — чтобы Edit Mode / следующая сцена не унаследовали ускорение.
-- `GameManager.timeScale` устаревший — установка значения в `Start()` GameManager-а перетирается ApplySimulationSpeed-ом MatchManager-а на следующем кадре. `MatchManager` владеет таймскейлом.
+- `MatchManager` — единственный владелец `Time.timeScale`. Других писателей не должно быть.
+
+**Headless-режим (для батч-симуляций):**
+- `headlessMode` (default false), `headlessTargetFps` (1–60, default 10). Хоткей **H** в Play Mode — toggle.
+- Включает: `QualitySettings.vSyncCount = 0`, `Application.targetFrameRate = headlessTargetFps`, отключает все камеры в сцене.
+- Идея: при `simulationSpeed = 50×` и низком render-fps Unity не тратит CPU на рендер, а каждый кадр выполняет много шагов физики/логики → симуляция бежит максимально быстро.
+- `OnDisable` восстанавливает исходные `vSyncCount`/`targetFrameRate`/камеры.
+
+**Метрика матчей:** при старте матча `MatchManager` зовёт `MatchStatsCollector.Instance.OnMatchStarted()`, при конце — `OnMatchEnded(outcome, durationSeconds, attackerSiteName, attackersAlive, defendersAlive)`. См. подсекцию 7.1.
 
 **Read-only в инспекторе:** `matchesPlayed`, `currentState` — для дебага серии.
 
@@ -471,6 +489,45 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 - Список `Vector3 DeathPositions`.
 - Сохраняется автоматически на `OnApplicationQuit` и `OnDestroy` GameManager-а.
 
+### 7.1 `MatchStatsCollector` (Core/MatchStats.cs)
+
+MonoSingleton, отвечает за сбор/агрегацию/отображение/сохранение метрик матчей.
+
+**События, на которые подписан:**
+- `OnMatchStarted()` — от `MatchManager` после успешного `TryStartMatch`. Сбрасывает per-match счётчики (first-blood, deaths).
+- `OnBotDied(side, role, position, matchTimeSeconds)` — от `BotComponent.Die`. Сторону определяет по типу TeamManager-а (`is AttackerTeamManager` → Attackers). Время — `MatchManager.CurrentMatchTime`. Зона смерти определяется через `MapManager.Zones` — попадание в любой из `BoxCollider`-сегментов (потому что зона теперь = несколько сегментов).
+- `OnMatchEnded(outcome, durationSeconds, attackerTargetSiteName, attackersAliveAtEnd, defendersAliveAtEnd)` — от `MatchManager` в `TickStateMachine` при завершении матча. `outcome ∈ {AttackersWin, DefendersWin, Timeout}`.
+
+**Метрики (read-only в инспекторе):**
+
+| Поле | Что показывает |
+|---|---|
+| `matchesPlayed`, `attackerWins`, `defenderWins`, `timeouts` | Базовые счётчики |
+| `attackerWinRate` / `defenderWinRate` / `timeoutRate` | Проценты от matchesPlayed |
+| `avgRoundDuration` | Среднее время матча в игровых секундах |
+| `avgTimeToFirstBlood` | Среднее время до первой смерти; «N/M матчей» — сколько матчей вообще имели kills |
+| `avgWinnerSurvivors` | Среднее число выживших ботов победившей стороны (proxy для KD) |
+| `siteAttackStats` | Per-site: сколько раз атакеры выбрали этот сайт + winrate |
+| `deathsAttackerRole` / `deathsFlankerRole` / `deathsScoutRole` / `deathsDefenderRole` | Накопленные смерти по ролям |
+| `topKillZones` | Топ-5 зон по количеству смертей |
+
+**Управление в инспекторе:**
+- `autoSaveOnFinish` (default true) — на `StopLoop` (S) и `OnApplicationQuit` сохраняет всю серию в Storage.
+- `resetOnMapRegen` (default true) — `MapGenerator.RegenerateMapRoutine` ищет `MatchStatsCollector` и при этом флаге вызывает `ResetAll()`. Логика: новая карта = новая статистика.
+
+**`StatsData : StorageData<StatsData>`** — JSON-дамп:
+- `List<MatchRecord> Matches` (MatchNumber, Outcome, DurationSeconds, AttackerTargetSite, AttackersAliveAtEnd, DefendersAliveAtEnd, Deaths, TimeToFirstBlood).
+- Файл `Application.persistentDataPath/Storage/StatsData.json`. `Storage.Save(Instance)` перезаписывает целиком.
+
+**Хоткеи (через MatchManager):**
+
+| Клавиша | Действие |
+|---|---|
+| `[` / `]` | Замедлить / ускорить симуляцию на шаг |
+| `\` | Сбросить скорость к 1× |
+| **H** | Toggle headless-режима (рендер off, FPS = `headlessTargetFps`) |
+| W / S / R | Start / Stop loop / Regenerate map (как и раньше) |
+
 ---
 
 ## 8. Зональные веса (`MapZoneComponent`)
@@ -492,10 +549,10 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 | Расстановка укрытий нестабильна | `MapGenerator.Covers.cs` | в активной переработке |
 | Комнаты есть только тип «галерея», нет перекрёстков и ниш | `MapGenerator.Rooms.cs` | Следующая итерация Этапа 1 |
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
-| Нет batch-симуляций | `MatchManager` гоняет матчи в одной сцене (`maxMatches`), но без сбора per-match метрик в Storage | Этап 5 roadmap |
+| Нет batch-симуляций | `MatchManager` гоняет серию матчей (`maxMatches`) + headless-режим, `MatchStatsCollector` пишет per-match метрики в Storage. Не хватает только runner-а по списку карт (param sweep). | Этап 5 roadmap |
+| Метрики только смерти + per-match агрегаты | `DeathData` (координаты) + `StatsData` (исход, длительность, kill-zones) | следующий шаг — kill-heatmap из StatsData |
 | Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
-| Метрики только смерти | `DeathData` | расширить: win-rate, длительность раунда, маршруты |
 
 ---
 

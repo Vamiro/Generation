@@ -46,17 +46,29 @@ public class MatchManager : MonoSingleton<MatchManager>
     private int maxMatches = 0;
 
     [Header("Скорость симуляции")]
-    [SerializeField, Range(0.1f, 20f), Tooltip("Множитель скорости симуляции. Меняется в полёте (слайдер, хоткеи [ / ] / \\).")]
+    [SerializeField, Range(0.1f, 50f), Tooltip("Множитель скорости симуляции. Меняется в полёте (слайдер, хоткеи [ / ] / \\). Реальный потолок зависит от CPU.")]
     private float simulationSpeed = 1f;
     [SerializeField, Tooltip("Автоматически масштабировать Time.fixedDeltaTime, чтобы физика оставалась плавной при ускорении. Иначе ускорение увеличит количество FixedUpdate в секунду.")]
     private bool scaleFixedDeltaTime = true;
     [SerializeField, Tooltip("Шаг изменения скорости хоткеями [ / ].")]
-    private float simulationSpeedStep = 0.5f;
+    private float simulationSpeedStep = 1f;
     [SerializeField, Tooltip("Включить хоткеи [ / ] / \\ для управления скоростью в Play Mode.")]
     private bool enableSpeedHotkeys = true;
 
+    [Header("Headless-режим (для батч-симуляций)")]
+    [SerializeField, Tooltip("Отключает рендер сцены (камеры, vSync) — весь CPU отдаётся симуляции/физике. Включается хоткеем H в Play Mode.")]
+    private bool headlessMode;
+    [SerializeField, Range(1, 60), Tooltip("Целевой FPS в headless-режиме (Application.targetFrameRate). Меньше = больше игрового времени на каждый рендер-кадр.")]
+    private int headlessTargetFps = 10;
+
+    private const float SimSpeedMin = 0.1f;
+    private const float SimSpeedMax = 50f;
+
     private float _appliedSimulationSpeed = -1f;
     private float _baselineFixedDeltaTime;
+    private bool _appliedHeadless;
+    private int _savedVSyncCount;
+    private int _savedTargetFps;
 
     [Header("Состояние (read-only)")]
     [SerializeField, ReadOnlyInInspector, Tooltip("Сколько матчей уже сыграно в текущей серии.")]
@@ -73,6 +85,7 @@ public class MatchManager : MonoSingleton<MatchManager>
 
     public bool IsLoopEnabled => _loopEnabled;
     public bool IsMatchActive => _state == MatchState.Running;
+    public float CurrentMatchTime => _state == MatchState.Running ? _stateTimer : 0f;
 
     protected override void Awake()
     {
@@ -80,11 +93,14 @@ public class MatchManager : MonoSingleton<MatchManager>
         // Запоминаем дефолтное значение из Project Settings → Time, чтобы корректно
         // масштабировать его при ускорении и восстановить при выключении.
         _baselineFixedDeltaTime = Time.fixedDeltaTime;
+        _savedVSyncCount = QualitySettings.vSyncCount;
+        _savedTargetFps = Application.targetFrameRate;
     }
 
     private void OnEnable()
     {
         ApplySimulationSpeed(simulationSpeed, force: true);
+        ApplyHeadlessMode(force: true);
     }
 
     private void OnDisable()
@@ -92,6 +108,7 @@ public class MatchManager : MonoSingleton<MatchManager>
         // Возвращаем нормальный темп — иначе Edit Mode/другие сцены унаследуют ускорение.
         Time.timeScale = 1f;
         Time.fixedDeltaTime = _baselineFixedDeltaTime > 0f ? _baselineFixedDeltaTime : 0.02f;
+        RestoreRenderSettings();
     }
 
 #if UNITY_EDITOR
@@ -112,6 +129,7 @@ public class MatchManager : MonoSingleton<MatchManager>
 
         HandleSpeedHotkeys();
         ApplySimulationSpeed(simulationSpeed);
+        ApplyHeadlessMode();
 
         try
         {
@@ -136,16 +154,19 @@ public class MatchManager : MonoSingleton<MatchManager>
 
         float step = Mathf.Max(0.01f, simulationSpeedStep);
         if (Input.GetKeyDown(KeyCode.LeftBracket))
-            simulationSpeed = Mathf.Max(0.1f, simulationSpeed - step);
+            simulationSpeed = Mathf.Max(SimSpeedMin, simulationSpeed - step);
         else if (Input.GetKeyDown(KeyCode.RightBracket))
-            simulationSpeed = Mathf.Min(20f, simulationSpeed + step);
+            simulationSpeed = Mathf.Min(SimSpeedMax, simulationSpeed + step);
         else if (Input.GetKeyDown(KeyCode.Backslash))
             simulationSpeed = 1f;
+
+        if (Input.GetKeyDown(KeyCode.H))
+            headlessMode = !headlessMode;
     }
 
     private void ApplySimulationSpeed(float speed, bool force = false)
     {
-        speed = Mathf.Clamp(speed, 0.1f, 20f);
+        speed = Mathf.Clamp(speed, SimSpeedMin, SimSpeedMax);
         if (!force && Mathf.Approximately(speed, _appliedSimulationSpeed))
             return;
 
@@ -158,8 +179,47 @@ public class MatchManager : MonoSingleton<MatchManager>
 
     public void SetSimulationSpeed(float speed)
     {
-        simulationSpeed = Mathf.Clamp(speed, 0.1f, 20f);
+        simulationSpeed = Mathf.Clamp(speed, SimSpeedMin, SimSpeedMax);
         ApplySimulationSpeed(simulationSpeed, force: true);
+    }
+
+    // Headless = "не рендерим, дайте CPU физике и логике". Снимаем vSync,
+    // ставим низкий target fps, отключаем все камеры в сцене. Включается флагом
+    // или хоткеем H. Выход — вернуть всё в исходное состояние из Awake.
+    private void ApplyHeadlessMode(bool force = false)
+    {
+        if (headlessMode)
+        {
+            // При включённом headless каждый кадр пересинхронизируем targetFrameRate —
+            // чтобы изменение headlessTargetFps в инспекторе подхватывалось без рестарта.
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = Mathf.Clamp(headlessTargetFps, 1, 60);
+            if (!_appliedHeadless || force)
+                SetCamerasEnabled(false);
+            _appliedHeadless = true;
+        }
+        else if (_appliedHeadless || force)
+        {
+            RestoreRenderSettings();
+            SetCamerasEnabled(true);
+            _appliedHeadless = false;
+        }
+    }
+
+    private void RestoreRenderSettings()
+    {
+        QualitySettings.vSyncCount = _savedVSyncCount;
+        Application.targetFrameRate = _savedTargetFps;
+    }
+
+    private void SetCamerasEnabled(bool enabled)
+    {
+        Camera[] cams = Camera.allCameras;
+        for (int i = 0; i < cams.Length; i++)
+        {
+            if (cams[i] != null)
+                cams[i].enabled = enabled;
+        }
     }
 
     public float SimulationSpeed => simulationSpeed;
@@ -187,6 +247,11 @@ public class MatchManager : MonoSingleton<MatchManager>
         DestroyTeams();
         _state = MatchState.Idle;
         _stateTimer = 0f;
+
+        var stats = MatchStatsCollector.Instance;
+        if (stats != null && stats.AutoSaveOnFinish)
+            stats.SaveToStorage();
+
         Debug.Log("MatchManager: цикл остановлен.");
     }
 
@@ -208,9 +273,18 @@ public class MatchManager : MonoSingleton<MatchManager>
 
                 if (timedOut || oneSideEmpty)
                 {
-                    string outcome = !oneSideEmpty
-                        ? "Timeout (ничья)"
-                        : (attackersAlive == 0 ? "Defenders win" : "Attackers win");
+                    MatchOutcome outcome;
+                    if (!oneSideEmpty) outcome = MatchOutcome.Timeout;
+                    else outcome = attackersAlive == 0 ? MatchOutcome.DefendersWin : MatchOutcome.AttackersWin;
+
+                    string attackerSiteName = _attackers != null && _attackers.targetSite != null
+                        ? _attackers.targetSite.name
+                        : null;
+
+                    var stats = MatchStatsCollector.Instance;
+                    if (stats != null)
+                        stats.OnMatchEnded(outcome, _stateTimer, attackerSiteName, attackersAlive, defendersAlive);
+
                     Debug.Log($"MatchManager: матч #{matchesPlayed + 1} завершён — {outcome}. " +
                               $"A={attackersAlive}, D={defendersAlive}, t={_stateTimer:F1}s");
 
@@ -314,6 +388,10 @@ public class MatchManager : MonoSingleton<MatchManager>
 
         _state = MatchState.Running;
         _stateTimer = 0f;
+
+        var stats = MatchStatsCollector.Instance;
+        if (stats != null) stats.OnMatchStarted();
+
         Debug.Log($"MatchManager: матч #{matchesPlayed + 1} стартовал. A={_attackers.LiveBotsCount}, D={_defenders.LiveBotsCount}.");
     }
 

@@ -31,7 +31,10 @@ public partial class MapGenerator
         if (coverPrefab == null)
             return;
 
-        bool[,] hasCover = new bool[width, height];
+        // Используем общее поле coverOccupancy (см. MapGenerator.cs) — после генерации
+        // оно остаётся доступным наружу через IsCellOccupiedByCover для других модулей
+        // (например, RuntimeZones исключает занятые клетки из samplePoints зоны).
+        bool[,] hasCover = coverOccupancy;
 
         // А) Зонные укрытия — через coverableZones.
         TryPlaceCoversForZoneType(BlockType.Site,    wallOnlyMode: false, hasCover);

@@ -158,6 +158,16 @@ public class BotComponent : MonoBehaviour
             gm.IncreaseDeathCount();
         }
 
+        // Метрика смерти: сторона определяется по типу TeamManager-а (Attacker vs Defender),
+        // время — текущий runtime матча. Если Collector-а нет — молча пропускаем.
+        var stats = MatchStatsCollector.Instance;
+        if (stats != null && team != null)
+        {
+            MatchSide side = team is AttackerTeamManager ? MatchSide.Attackers : MatchSide.Defenders;
+            float matchTime = MatchManager.Instance != null ? MatchManager.Instance.CurrentMatchTime : 0f;
+            stats.OnBotDied(side, role, transform.position, matchTime);
+        }
+
         if (team != null && team.Bots != null)
             team.Bots.Remove(this);
 

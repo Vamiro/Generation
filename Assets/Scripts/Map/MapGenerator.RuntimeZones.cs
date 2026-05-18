@@ -245,9 +245,59 @@ public partial class MapGenerator
     {
         List<Vector3> samplePoints = new(region.Cells.Count);
         foreach (Vector2Int cell in region.Cells)
+        {
+            // Пропускаем клетки, на которых стоит укрытие, — иначе боты
+            // (включая стартовый спавн) могут оказаться внутри блока укрытия.
+            if (IsCellOccupiedByCover(cell.x, cell.y))
+                continue;
             samplePoints.Add(new Vector3(cell.x * blockSize, 0f, cell.y * blockSize));
+        }
+
+        // Граничный случай: вся зона покрыта укрытиями (маленький Spawn + плотный cover).
+        // Тогда fallback — берём вообще все клетки региона, иначе getRandomPointInZone
+        // упадёт на пустом списке.
+        if (samplePoints.Count == 0)
+        {
+            foreach (Vector2Int cell in region.Cells)
+                samplePoints.Add(new Vector3(cell.x * blockSize, 0f, cell.y * blockSize));
+        }
 
         return samplePoints;
+    }
+
+    // Пересобирает samplePoints у уже зарегистрированных зон. Вызывается после
+    // PlaceCovers, потому что в основном проходе BuildAndRegisterZoneObjects
+    // занятость укрытиями ещё не известна (PlaceCovers идёт позже в пайплайне).
+    void RefreshZoneSamplePointsAfterCovers()
+    {
+        MapManager mapManager = MapManager.Instance;
+        if (mapManager == null) return;
+
+        foreach (BlockType zoneType in RuntimeZoneTypes)
+        {
+            foreach (ZoneRegion region in ExtractRegionsForType(zoneType))
+            {
+                MapZoneComponent matched = FindZoneAtRegionCenter(mapManager, region);
+                if (matched == null) continue;
+
+                matched.SetSamplePoints(BuildSamplePoints(region));
+            }
+        }
+    }
+
+    MapZoneComponent FindZoneAtRegionCenter(MapManager mapManager, ZoneRegion region)
+    {
+        // Регионы извлекаются flood-fill-ом в том же порядке, что и при первичной регистрации,
+        // но проще найти зону по позиции центра — позиция уникально определяется
+        // координатами региона и blockSize.
+        Vector3 expectedPos = region.GetCenterWorld(blockSize);
+        foreach (MapZoneComponent zone in mapManager.Zones)
+        {
+            if (zone == null) continue;
+            if ((zone.transform.position - expectedPos).sqrMagnitude < 0.01f)
+                return zone;
+        }
+        return null;
     }
 
     void AssignRoadTargets(List<RoadZoneComponent> roadZones, List<SiteZoneComponent> siteZones)

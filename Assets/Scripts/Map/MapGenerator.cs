@@ -138,6 +138,14 @@ public partial class MapGenerator : MonoBehaviour
     private BlockComponent[,] floorInstances;
     // Веса клеток (нужны Main для прогрессии вдоль пути и потенциально для covers).
     private int[,] cellWeights;
+    // Карта занятости клетки укрытием. Заполняется в PlaceCovers, читается потом
+    // в RuntimeZones.BuildSamplePoints, чтобы боты не спавнились на укрытиях.
+    private bool[,] coverOccupancy;
+    public bool IsCellOccupiedByCover(int x, int z)
+    {
+        if (coverOccupancy == null || !IsInsideMap(x, z)) return false;
+        return coverOccupancy[x, z];
+    }
     // Пути main-дорог (заполняется в BuildMainRoutes, читается в PlaceRooms).
     private List<List<Vector2Int>> mainRoadPaths = new();
     // Пути main-дорог по команде — нужны для ответвления Link.
@@ -236,6 +244,12 @@ public partial class MapGenerator : MonoBehaviour
         if (existing != null)
             existing.StopLoop();
 
+        // Карта меняется → накопленная статистика теряет смысл (зоны другие).
+        // Сброс контролируется флагом resetOnMapRegen в MatchStatsCollector.
+        var stats = FindObjectOfType<MatchStatsCollector>();
+        if (stats != null && stats.ResetOnMapRegen)
+            stats.ResetAll();
+
         MapManager mapManager = MapManager.Instance;
         if (mapManager != null)
             mapManager.ClearZones();
@@ -280,7 +294,12 @@ public partial class MapGenerator : MonoBehaviour
         BuildOuterWalls();
 
         if (enableCovers)
+        {
             PlaceCovers();
+            // После расстановки укрытий пересобираем samplePoints зон, чтобы боты
+            // (особенно в SpawnZone) не получили стартовую/случайную точку прямо в укрытии.
+            RefreshZoneSamplePointsAfterCovers();
+        }
 
         // Финальный шаг: запекаем NavMesh по геометрии. Делается ПОСЛЕ ВСЕХ stage-ов,
         // которые создают коллайдеры (стены, укрытия, choke-блоки).
@@ -318,6 +337,7 @@ public partial class MapGenerator : MonoBehaviour
         cellTypes = new BlockType[width, height];
         floorInstances = new BlockComponent[width, height];
         cellWeights = new int[width, height];
+        coverOccupancy = new bool[width, height];
         mainRoadPaths.Clear();
         attackerMainPaths.Clear();
         defenderMainPaths.Clear();
