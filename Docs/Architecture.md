@@ -283,11 +283,13 @@ A* с учётом штрафов и предпочтений.
 После разметки:
 1. Для каждого типа из `RuntimeZoneTypes` извлекает связные регионы через flood-fill.
 2. Сортирует регионы (стабильный порядок: сначала по типу, потом по координатам).
-3. Для каждого региона создаёт GameObject с подходящим компонентом (`SpawnZoneComponent` / `SiteZoneComponent` / `RoadZoneComponent` (+ roadType) / `NeutralZoneComponent`).
-4. Прикрепляет BoxCollider под bounding box региона.
-5. Заполняет `samplePoints` (мировые координаты центров каждой клетки региона) — нужны ботам для `GetRandomPointInZone()`.
+3. Для каждого региона создаёт GameObject с подходящим компонентом (`SpawnZoneComponent` / `SiteZoneComponent` / `RoadZoneComponent` (+ roadType) / `NeutralZoneComponent` / `RoomZoneComponent`).
+4. **Декомпозирует** регион на минимальный набор axis-aligned прямоугольников (`DecomposeRegionIntoRectangles`, greedy) и для каждого вешает отдельный `BoxCollider` (`isTrigger = true`). Это даёт изогнутой дороге несколько компактных сегментов-коллайдеров вместо одного огромного AABB над пустотой. Прямая дорога шириной N → 1 прямоугольник; изогнутая L-образная → 2; зона с круглой кистью → ступенчатая декомпозиция.
+5. Заполняет `samplePoints` (мировые координаты центров каждой клетки региона) — нужны ботам для `GetRandomPointInZone()`. В отсутствие sample-points fallback выбирает случайный сегмент-коллайдер, взвешенный по площади.
 6. Регистрирует в `MapManager`.
 7. **`AssignRoadTargets`**: каждой дороге назначается ближайший сайт (`roadToSite`). Если для какого-то сайта нет дорог конкретного типа — fallback на ближайшую любого типа.
+
+**Инвариант:** один `MapZoneComponent` = одна логическая зона, но **может содержать несколько `BoxCollider`-сегментов** (`BoxColliders` — `IReadOnlyList<BoxCollider>`). Триггер по любому из них означает попадание в зону. `RoomZoneComponent` для комнат/карманов на дороге — отдельные зоны (комната = свой flood-fill регион типа `Room`/`Pocket`), их коллайдеры не сливаются с дорогой.
 
 ### 4.8 Слой Rooms (`MapGenerator.Rooms.cs`)
 

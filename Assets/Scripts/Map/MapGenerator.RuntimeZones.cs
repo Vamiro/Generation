@@ -115,15 +115,28 @@ public partial class MapGenerator
     {
         GameObject zoneObject = new GameObject($"{region.Type}Zone_{nextZoneId}");
         zoneObject.transform.SetParent(zonesRoot, false);
-        zoneObject.transform.position = region.GetCenterWorld(blockSize);
+        Vector3 zoneOrigin = region.GetCenterWorld(blockSize);
+        zoneObject.transform.position = zoneOrigin;
 
-        BoxCollider boxCollider = zoneObject.AddComponent<BoxCollider>();
-        boxCollider.isTrigger = true; // зона — это логическая разметка, не физика
-        boxCollider.size = new Vector3(
-            (region.Max.x - region.Min.x + 1) * blockSize,
-            Mathf.Max(0.1f, blockSize * 0.5f),
-            (region.Max.y - region.Min.y + 1) * blockSize);
-        boxCollider.center = Vector3.zero;
+        // Вместо одного огромного AABB разбиваем регион на минимальный набор
+        // прямоугольников (greedy) — это даёт изогнутой дороге несколько
+        // компактных коллайдеров-сегментов вместо одного большого куба над пустотой.
+        List<RectInt> rects = DecomposeRegionIntoRectangles(region);
+        List<BoxCollider> colliders = new(rects.Count);
+        float colliderHeight = Mathf.Max(0.1f, blockSize * 0.5f);
+
+        foreach (RectInt rect in rects)
+        {
+            BoxCollider boxCollider = zoneObject.AddComponent<BoxCollider>();
+            boxCollider.isTrigger = true; // зона — это логическая разметка, не физика
+            boxCollider.size = new Vector3(rect.width * blockSize, colliderHeight, rect.height * blockSize);
+
+            // Центр прямоугольника в мировых координатах — относительно центра зоны.
+            float centerXWorld = (rect.xMin + rect.xMax - 1) * 0.5f * blockSize;
+            float centerZWorld = (rect.yMin + rect.yMax - 1) * 0.5f * blockSize;
+            boxCollider.center = new Vector3(centerXWorld - zoneOrigin.x, 0f, centerZWorld - zoneOrigin.z);
+            colliders.Add(boxCollider);
+        }
 
         MapZoneComponent zoneComponent;
         switch (region.Type)
@@ -154,11 +167,78 @@ public partial class MapGenerator
                 return null;
         }
 
-        zoneComponent.InitializeZone(nextZoneId, boxCollider);
+        zoneComponent.InitializeZone(nextZoneId, colliders);
         zoneComponent.SetSamplePoints(BuildSamplePoints(region));
         nextZoneId++;
         region.ZoneComponent = zoneComponent;
         return zoneComponent;
+    }
+
+    // Жадная декомпозиция набора клеток региона на минимальный (приближённо)
+    // набор axis-aligned прямоугольников. Идея: пока есть непокрытые клетки,
+    // берём самую верхнюю-левую и жадно расширяем её вправо, потом вниз, пока
+    // расширяемый прямоугольник полностью лежит внутри региона.
+    // Алгоритм даёт сегменты-«куски» дороги: для прямой дороги шириной N — 1
+    // прямоугольник, для изогнутой — 2-3 (по числу прямых участков), и т.п.
+    List<RectInt> DecomposeRegionIntoRectangles(ZoneRegion region)
+    {
+        List<RectInt> result = new();
+        if (region.Cells.Count == 0)
+            return result;
+
+        int regionWidth = region.Max.x - region.Min.x + 1;
+        int regionHeight = region.Max.y - region.Min.y + 1;
+        bool[,] belongs = new bool[regionWidth, regionHeight];
+        bool[,] covered = new bool[regionWidth, regionHeight];
+
+        foreach (Vector2Int cell in region.Cells)
+            belongs[cell.x - region.Min.x, cell.y - region.Min.y] = true;
+
+        for (int localZ = 0; localZ < regionHeight; localZ++)
+        {
+            for (int localX = 0; localX < regionWidth; localX++)
+            {
+                if (!belongs[localX, localZ] || covered[localX, localZ])
+                    continue;
+
+                // Расширяем по X насколько возможно (пока клетки принадлежат региону и не покрыты).
+                int spanX = 1;
+                while (localX + spanX < regionWidth &&
+                       belongs[localX + spanX, localZ] &&
+                       !covered[localX + spanX, localZ])
+                {
+                    spanX++;
+                }
+
+                // Расширяем по Z: целая полоса шириной spanX должна быть свободна.
+                int spanZ = 1;
+                while (localZ + spanZ < regionHeight)
+                {
+                    bool rowOk = true;
+                    for (int dx = 0; dx < spanX; dx++)
+                    {
+                        if (!belongs[localX + dx, localZ + spanZ] || covered[localX + dx, localZ + spanZ])
+                        {
+                            rowOk = false;
+                            break;
+                        }
+                    }
+
+                    if (!rowOk)
+                        break;
+
+                    spanZ++;
+                }
+
+                for (int dz = 0; dz < spanZ; dz++)
+                    for (int dx = 0; dx < spanX; dx++)
+                        covered[localX + dx, localZ + dz] = true;
+
+                result.Add(new RectInt(region.Min.x + localX, region.Min.y + localZ, spanX, spanZ));
+            }
+        }
+
+        return result;
     }
 
     List<Vector3> BuildSamplePoints(ZoneRegion region)
