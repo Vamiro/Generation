@@ -29,7 +29,8 @@ public partial class MapGenerator
         public int AlongAxis;
     }
 
-    // Окружает Spawn, Site, Neutral и Room зоны стенами с ограниченными входами.
+    // Окружает Spawn, Site, Neutral и Room стенами с ограниченными входами.
+    // Pocket (открытые галереи) НЕ обносятся стенами — они открыты со стороны дороги.
     void ShapeZoneEnclosures()
     {
         if (!enableZoneEnclosures)
@@ -40,14 +41,21 @@ public partial class MapGenerator
         if (generateNeutralZone)
             ShapeZoneTypeEnclosures(BlockType.Neutral);
         if (enableRooms)
-            ShapeZoneTypeEnclosures(BlockType.Room);
+            ShapeZoneTypeEnclosures(BlockType.Room); // только закрытые Room, не Pocket
     }
 
     void ShapeZoneTypeEnclosures(BlockType zoneType)
     {
         List<ZoneRegion> regions = ExtractRegionsForType(zoneType);
         foreach (ZoneRegion region in regions)
+        {
             EncloseRegion(region);
+
+            // Pre-site Room: дополнительно ставим стену между комнатой и сайтом,
+            // оставляя ровно 1 клетку входа — как Hookah → B Site в Valorant.
+            if (zoneType == BlockType.Room)
+                SealRoomSiteBoundary(region);
+        }
     }
 
     void EncloseRegion(ZoneRegion region)
@@ -189,5 +197,78 @@ public partial class MapGenerator
         // Для режима Cover оставляем тип дороги, но вешаем сверху префаб укрытия.
         Vector3 worldPos = new Vector3(candidate.Outside.x * blockSize, blockSize, candidate.Outside.y * blockSize);
         Instantiate(coverPrefab, worldPos, Quaternion.identity, transform);
+    }
+
+    // ───── Стена между Room и Site ────────────────────────────────────────────
+    // Для pre-site Room: находит все Room-клетки, смежные с Site, и ставит Wall
+    // на каждую из них КРОМЕ одной центральной — это вход из Room в Site (1 клетка).
+    // Нельзя стенить со стороны Site (Site защищён), поэтому стены ставим со стороны Room.
+    void SealRoomSiteBoundary(ZoneRegion region)
+    {
+        HashSet<Vector2Int> regionSet = new(region.Cells.Count);
+        foreach (Vector2Int cell in region.Cells) regionSet.Add(cell);
+
+        int[] dx = { 0,  0, -1, 1 };
+        int[] dz = { 1, -1,  0, 0 };
+        bool[] horizontal = { true, true, false, false }; // Top/Bottom → сортируем по X; Left/Right → по Z
+
+        // Группируем Room-клетки у Site-границы по стороне.
+        Dictionary<int, List<Vector2Int>> sideGroups = new()
+        {
+            { 0, new() }, // Top
+            { 1, new() }, // Bottom
+            { 2, new() }, // Left
+            { 3, new() }  // Right
+        };
+
+        foreach (Vector2Int cell in region.Cells)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                Vector2Int outside = new Vector2Int(cell.x + dx[i], cell.y + dz[i]);
+                if (!IsInsideMap(outside.x, outside.y)) continue;
+                if (regionSet.Contains(outside)) continue;
+                if (cellTypes[outside.x, outside.y] == BlockType.Site)
+                {
+                    sideGroups[i].Add(cell);
+                    break; // одна сторона на клетку — первое найденное направление к Site
+                }
+            }
+        }
+
+        foreach (var entry in sideGroups)
+        {
+            List<Vector2Int> cells = entry.Value;
+            if (cells.Count == 0) continue;
+
+            bool isHoriz = horizontal[entry.Key];
+            cells.Sort((a, b) => isHoriz ? a.x.CompareTo(b.x) : a.y.CompareTo(b.y));
+
+            // Разбиваем на связные сегменты подряд идущих клеток.
+            List<List<Vector2Int>> segments = new();
+            List<Vector2Int> current = new() { cells[0] };
+            for (int i = 1; i < cells.Count; i++)
+            {
+                int prev = isHoriz ? cells[i - 1].x : cells[i - 1].y;
+                int curr = isHoriz ? cells[i].x     : cells[i].y;
+                if (curr == prev + 1) current.Add(cells[i]);
+                else { segments.Add(current); current = new List<Vector2Int> { cells[i] }; }
+            }
+            segments.Add(current);
+
+            foreach (List<Vector2Int> segment in segments)
+            {
+                if (segment.Count <= 1) continue; // уже 1 клетка = вход, ничего не делаем
+
+                // Оставляем 1 клетку по центру как вход, остальные → Wall.
+                int entranceIdx = segment.Count / 2;
+                for (int i = 0; i < segment.Count; i++)
+                {
+                    if (i == entranceIdx) continue;
+                    // Стеним Room-клетку (не Site-клетку — та защищена).
+                    TryMarkBlock(segment[i].x, segment[i].y, BlockType.Wall, trackZone: false);
+                }
+            }
+        }
     }
 }

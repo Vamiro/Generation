@@ -20,17 +20,10 @@ public enum CoverableZones
 public partial class MapGenerator
 {
     // ─────────────────────────────────────────────────────────────────────────
-    // Алгоритм расстановки укрытий: «Вес = видимость из входов»
-    //
-    // Суть: укрытие нужно там, где игрок наиболее открыт для входящих.
-    // Для Site/Neutral/Room/Spawn: полный алгоритм на всех клетках зоны.
-    // Для Main/Link: только wall-adjacent клетки (корридорные боксы у стен).
-    //
-    // Алгоритм:
-    //  1. Найти входы зоны (клетки смежные с Main/Link/Room).
-    //  2. Построить весовую карту: weight[C] = число входов, из которых C видна.
-    //  3. Итерация: max-weight → cover → обновить тени → повторить.
-    //  4. Опционально: поставить второй смежный блок (double cover).
+    // Два независимых алгоритма:
+    //  А) Зонные укрытия (Site/Neutral/Room/Spawn): вес = видимость из входов, итерация.
+    //  Б) Дорожные укрытия (Main/Link): 0-1 cover на путь, строго у стены, в середине.
+    //     Никогда не блокирует выходы на зоны — концы путей исключены из кандидатов.
     // ─────────────────────────────────────────────────────────────────────────
 
     void PlaceCovers()
@@ -40,12 +33,172 @@ public partial class MapGenerator
 
         bool[,] hasCover = new bool[width, height];
 
+        // А) Зонные укрытия — через coverableZones.
         TryPlaceCoversForZoneType(BlockType.Site,    wallOnlyMode: false, hasCover);
         TryPlaceCoversForZoneType(BlockType.Neutral, wallOnlyMode: false, hasCover);
         TryPlaceCoversForZoneType(BlockType.Spawn,   wallOnlyMode: false, hasCover);
         TryPlaceCoversForZoneType(BlockType.Room,    wallOnlyMode: false, hasCover);
-        TryPlaceCoversForZoneType(BlockType.Main,    wallOnlyMode: true,  hasCover);
-        TryPlaceCoversForZoneType(BlockType.Link,    wallOnlyMode: true,  hasCover);
+
+        // Б) Дорожные укрытия — также управляются через coverableZones.
+        if ((coverableZones & CoverableZones.Main) != 0)
+            PlaceRoadCoversOnPaths(mainRoadPaths, BlockType.Main, hasCover);
+        if ((coverableZones & CoverableZones.Link) != 0)
+            PlaceRoadCoversOnPaths(linkPaths, BlockType.Link, hasCover);
+    }
+
+    // ───── Б) Дорожные укрытия: wall-adjacent + экспозиция ───────────────────
+    //
+    //  1. Собрать wall-adjacent клетки в диапазоне [roadCoverRange] вдоль пути.
+    //  2. Отфильтровать по экспозиции: клетки ниже порога не нужны
+    //     (после поворота — и так прикрыто, cover не даёт тактического смысла).
+    //  3. Отсортировать по убыванию экспозиции — первыми ставить на самые открытые места.
+    //  4. Поставить roadCoversPerPath.Random() cover-ов с соблюдением spacing.
+    //
+    //  «У стены» = хотя бы один из 4 соседей — Wall/Empty/за краем карты.
+    //  На 1-клеточном коридоре ВСЕ клетки wall-adjacent (стены с обеих сторон) → работает.
+    //  На 2-клеточном — только крайние клетки → тоже корректно.
+    void PlaceRoadCoversOnPaths(List<List<Vector2Int>> paths, BlockType roadType, bool[,] hasCover)
+    {
+        if (paths == null) return;
+
+        int spacing = Mathf.Max(1, coverMinSpacing);
+        int minExp  = Mathf.Max(1, roadCoverMinExposure);
+        List<Vector2Int> placed = new(); // глобальный: spacing между путями
+
+        foreach (List<Vector2Int> path in paths)
+        {
+            if (path == null || path.Count < 6) continue;
+            if (Random.value > Mathf.Clamp01(roadCoverChance)) continue;
+
+            int idxStart = Mathf.CeilToInt (path.Count * roadCoverRange.min);
+            int idxEnd   = Mathf.FloorToInt(path.Count * roadCoverRange.max);
+            idxStart = Mathf.Clamp(idxStart, 1, path.Count - 2);
+            idxEnd   = Mathf.Clamp(idxEnd,   idxStart, path.Count - 2);
+
+            // Кандидаты: клетки ВСЁ ЕЩЁ нужного типа дороги + wall-adjacent + достаточная экспозиция.
+            // Ключевой фикс: PlaceRooms() мог перекрасить часть клеток пути в Room/Wall —
+            // такие клетки из рассмотрения исключаем.
+            List<(Vector2Int cell, int exposure)> candidates = new();
+            for (int i = idxStart; i <= idxEnd; i++)
+            {
+                Vector2Int cell = path[i];
+                if (!IsInsideMap(cell.x, cell.y)) continue;
+                if (hasCover[cell.x, cell.y]) continue;
+
+                // Клетка должна оставаться нужным типом дороги — не перекрашенной в Room/Wall.
+                if (cellTypes[cell.x, cell.y] != roadType) continue;
+
+                if (!IsRoadWallAdjacent(cell)) continue;
+
+                int exp = ComputeRoadExposure(cell);
+                if (exp >= minExp)
+                    candidates.Add((cell, exp));
+            }
+
+            if (candidates.Count == 0) continue;
+
+            // Сортируем: наиболее открытые — первыми.
+            candidates.Sort((a, b) => b.exposure.CompareTo(a.exposure));
+
+            int count  = roadCoversPerPath.Random();
+            int placed_ = 0;
+            foreach (var (chosen, _) in candidates)
+            {
+                if (placed_ >= count) break;
+                if (HasCoverWithinSpacing(chosen, placed, spacing)) continue;
+                PlaceCoverAt(chosen);
+                hasCover[chosen.x, chosen.y] = true;
+                placed.Add(chosen);
+                placed_++;
+            }
+        }
+    }
+
+    // Экспозиция = максимальная дальность прямого обзора по 4 осям.
+    // ВАЖНО: луч идёт только по клеткам ТОГО ЖЕ типа дороги (Main по Main, Link по Link).
+    // Это означает:
+    //   - длинный прямой коридор → высокая экспозиция;
+    //   - клетка на повороте → луч быстро упирается → низкая;
+    //   - клетка у Room/Site → луч останавливается на границе → Room не «добавляет» экспозицию.
+    int ComputeRoadExposure(Vector2Int cell)
+    {
+        BlockType myType = cellTypes[cell.x, cell.y];
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
+        int maxSight = 0;
+
+        for (int dir = 0; dir < 4; dir++)
+        {
+            int sight = 0;
+            int nx = cell.x + dx[dir];
+            int nz = cell.y + dz[dir];
+
+            while (IsInsideMap(nx, nz))
+            {
+                if (cellTypes[nx, nz] != myType) break; // другой тип — стоп
+                sight++;
+                nx += dx[dir];
+                nz += dz[dir];
+            }
+
+            maxSight = Mathf.Max(maxSight, sight);
+        }
+
+        return maxSight;
+    }
+
+    // Клетка коридора у стены — имеет хотя бы одного соседа Wall/Empty/вне карты.
+    // Дополнительно: если сосед — Room, отклоняем: Room уже создаёт тактическое разнообразие
+    // на этом участке дороги, дублировать cover рядом не нужно.
+    bool IsRoadWallAdjacent(Vector2Int cell)
+    {
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
+        bool hasOuterWall = false;
+
+        for (int i = 0; i < 4; i++)
+        {
+            int nx = cell.x + dx[i];
+            int nz = cell.y + dz[i];
+
+            if (!IsInsideMap(nx, nz))
+            {
+                hasOuterWall = true;
+                continue;
+            }
+
+            BlockType nt = cellTypes[nx, nz];
+
+            if (nt == BlockType.Room || nt == BlockType.Pocket) return false;
+
+            if (nt == BlockType.Empty)
+            {
+                hasOuterWall = true;
+            }
+            else if (nt == BlockType.Wall)
+            {
+                // Wall — хорошо, но только если это внешняя стена, а не обводка Room.
+                if (!IsRoomEnclosureWall(nx, nz))
+                    hasOuterWall = true;
+            }
+        }
+
+        return hasOuterWall;
+    }
+
+    // Wall-клетка является стеной обводки Room (от ShapeZoneEnclosures) если
+    // хотя бы один её 4-сосед — Room. Такие стены не должны привлекать road cover.
+    bool IsRoomEnclosureWall(int wx, int wz)
+    {
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
+        for (int i = 0; i < 4; i++)
+        {
+            int nx = wx + dx[i];
+            int nz = wz + dz[i];
+            if (IsInsideMap(nx, nz) && cellTypes[nx, nz] == BlockType.Room) return true;
+        }
+        return false;
     }
 
     void TryPlaceCoversForZoneType(BlockType zoneType, bool wallOnlyMode, bool[,] hasCover)
@@ -65,8 +218,6 @@ public partial class MapGenerator
             BlockType.Neutral => (coverableZones & CoverableZones.Neutral) != 0 && generateNeutralZone,
             BlockType.Spawn   => (coverableZones & CoverableZones.Spawn)   != 0,
             BlockType.Room    => (coverableZones & CoverableZones.Room)    != 0,
-            BlockType.Main    => (coverableZones & CoverableZones.Main)    != 0,
-            BlockType.Link    => (coverableZones & CoverableZones.Link)    != 0,
             _                 => false
         };
     }
@@ -99,6 +250,11 @@ public partial class MapGenerator
         int limit      = Mathf.Min(hardLimit, fillLimit);
         if (limit <= 0) return;
 
+        // Начальный максимум — порог остановки вычисляется от него.
+        int initialMaxWeight = FindMaxWeight(candidates, weight, hasCover);
+        if (initialMaxWeight <= 0) return;
+        int stopThreshold = Mathf.Max(1, Mathf.CeilToInt(initialMaxWeight * Mathf.Clamp01(coverStopFraction)));
+
         int spacing = Mathf.Max(1, coverMinSpacing);
         List<Vector2Int> placed = new();
         int placedCount = 0;
@@ -109,7 +265,11 @@ public partial class MapGenerator
                     out Vector2Int chosen, out int chosenWeight))
                 break;
 
+            // Два условия остановки:
+            //  1. Абсолютный порог (coverMinEntranceVisibility) — минимальная видимость.
+            //  2. Относительный порог (coverStopFraction) — когда основные "горячие точки" уже прикрыты.
             if (chosenWeight < coverMinEntranceVisibility) break;
+            if (chosenWeight < stopThreshold) break;
 
             // Поставить основной блок.
             PlaceCoverAt(chosen);
@@ -156,7 +316,7 @@ public partial class MapGenerator
         int[] dx = { 1, -1, 0, 0 };
         int[] dz = { 0, 0, 1, -1 };
 
-        int bestWeight = coverMultiCellNeighborMinWeight - 1;
+        int bestWeight = 0; // минимальный вес соседа — хватит любого ненулевого
         bool found = false;
 
         for (int i = 0; i < 4; i++)
@@ -243,6 +403,17 @@ public partial class MapGenerator
     }
 
     // ───── Поиск лучшей клетки ────────────────────────────────────────────────
+
+    int FindMaxWeight(HashSet<Vector2Int> candidates, int[,] weight, bool[,] hasCover)
+    {
+        int max = 0;
+        foreach (Vector2Int cell in candidates)
+        {
+            if (!hasCover[cell.x, cell.y] && weight[cell.x, cell.y] > max)
+                max = weight[cell.x, cell.y];
+        }
+        return max;
+    }
 
     bool TryFindBestCoverCell(
         HashSet<Vector2Int> candidates,

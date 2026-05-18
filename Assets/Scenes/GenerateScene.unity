@@ -341,17 +341,17 @@ MonoBehaviour:
   height: 80
   blockSize: 2
   spawnZoneSize:
-    min: 8
-    max: 10
+    min: 4
+    max: 8
   siteZoneSize:
-    min: 4
-    max: 6
+    min: 6
+    max: 10
   neutralZoneSize:
-    min: 4
-    max: 6
+    min: 5
+    max: 10
   innerPadding: 4
   spawnHorizontalOffset: 3
-  siteLineBiasToDefender: 0.25
+  siteLineBiasToDefender: 0.405
   siteVerticalJitter: 2
   siteCenterDriftMax: 4
   siteMinCenterDistanceMultiplier: 2
@@ -418,23 +418,34 @@ MonoBehaviour:
     max: 4
   enableLinkRooms: 1
   linkRoomSize:
-    min: 1
-    max: 2
+    min: 2
+    max: 3
   enableZoneEnclosures: 1
   maxEntranceWidth: 2
   entranceFillMode: 0
   outerWallThickness: 2
-  outerWallHeight: 2
+  outerWallHeight: 3
   enableCovers: 1
-  coverableZones: 3
+  coverableZones: -1
   coverHeight: 1
-  coverMaxFillRatio: 0.25
-  coverMaxPerZone: 0
   coverMinSpacing: 2
-  coversPerAxis: 2
-  axisPocketDistance: 2
-  axisLateralOffsetChance: 0.6
-  useEntranceToEntranceAxes: 1
+  coverMinEntranceVisibility: 1
+  coverRandomBias: 0.2
+  coverEntranceForbiddenRadius: 1
+  coverMaxFillRatio: 0.1
+  coverMaxPerZone: 5
+  coverStopFraction: 0.45
+  coverMultiCellChance:
+    min: 0.25
+    max: 0.45
+  roadCoverRange:
+    min: 0.2
+    max: 0.8
+  roadCoversPerPath:
+    min: 1
+    max: 2
+  roadCoverChance: 0.7
+  roadCoverMinExposure: 3
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0

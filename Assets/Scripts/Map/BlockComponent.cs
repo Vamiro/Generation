@@ -13,7 +13,8 @@ public enum BlockType
     Neutral,
     Site,
     Road,
-    Room
+    Pocket, // Открытый карман / галерея вдоль дороги — без стен со стороны road
+    Room    // Закрытая комната с choke-входом (Hookah-подобная)
 }
 
 
@@ -37,7 +38,7 @@ public class BlockData
     {
         // Если текущий тип – Spawn/Site/Neutral, запрещаем смену на Main, Link или Road
         if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
-            (newType == BlockType.Main || newType == BlockType.Link || newType == BlockType.Road || newType == BlockType.Room))
+            (newType == BlockType.Main || newType == BlockType.Link || newType == BlockType.Road || newType == BlockType.Room || newType == BlockType.Pocket))
         {
             return;
         }

@@ -145,6 +145,9 @@ public partial class MapGenerator
             case BlockType.Room:
                 zoneComponent = zoneObject.AddComponent<RoomZoneComponent>();
                 break;
+            case BlockType.Pocket:
+                zoneComponent = zoneObject.AddComponent<RoomZoneComponent>(); // пока один компонент
+                break;
             default:
                 Destroy(zoneObject);
                 return null;

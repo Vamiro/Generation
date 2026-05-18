@@ -13,11 +13,25 @@ public abstract class TeamManager : MonoBehaviour
     public List<BotComponent> Bots => bots;
     public TeamManager OtherTeam => otherTeam;
 
+    // Заполнение состава команды из кода (для рантайм-спавна через MatchManager).
+    // Должно быть вызвано ДО первого Start() — то есть в том же кадре, что и AddComponent.
+    public void SetBots(List<BotComponent> newBots)
+    {
+        bots = newBots ?? new List<BotComponent>();
+    }
+
+    public void SetOtherTeam(TeamManager team)
+    {
+        otherTeam = team;
+    }
+
     public virtual void Start()
     {
+        if (bots == null) return;
         foreach (var bot in bots)
         {
-            bot.Init(this);
+            if (bot != null)
+                bot.Init(this);
         }
     }
 

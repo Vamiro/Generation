@@ -90,6 +90,7 @@ public partial class MapGenerator : MonoBehaviour
     [FormerlySerializedAs("roomMaterial")]
     [SerializeField, Tooltip("Материал для нейтральной зоны.")] private Material neutralMaterial;
     [SerializeField, Tooltip("Материал для комнат (галереи, ниши вдоль дорог).")] private Material roomMaterial;
+    [SerializeField, Tooltip("Материал для открытых карманов/галерей (Pocket — без стен со стороны дороги).")] private Material pocketMaterial;
 
     [Header("Комнаты")]
     [SerializeField, Tooltip("Генерировать комнаты-галереи вдоль main-дорог.")] private bool enableRooms = true;
@@ -112,22 +113,24 @@ public partial class MapGenerator : MonoBehaviour
 
     [Header("Настройки укрытий")]
     [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = true;
-    [SerializeField, Tooltip("Зоны, в которых выполняется расстановка укрытий.")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
+    [SerializeField, Tooltip("Зоны для расстановки укрытий. Site/Neutral/Room — весовой алгоритм. Main/Link — отдельный алгоритм (wall-adjacent, экспозиция).")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
     [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
+    [SerializeField, Min(1), Tooltip("Минимальное расстояние Чебышёва между двумя укрытиями (действует и в зонах, и на дорогах).")] private int coverMinSpacing = 2;
 
-    [Header("Укрытия — веса и видимость")]
-    [SerializeField, Min(1), Tooltip("Минимальный счётчик входов, из которых клетка должна просматриваться, чтобы стать кандидатом. 1 = любая видимость, 2 = должна быть видна минимум из двух входов.")] private int coverMinEntranceVisibility = 1;
-    [SerializeField, Range(0f, 1f), Tooltip("Случайный шум, добавляемый к весу клетки. 0 = детерминировано, 1 = высокая вариативность между генерациями.")] private float coverRandomBias = 0.2f;
-    [SerializeField, Min(0), Tooltip("Запрет постановки укрытия в N клетках от входа (чтобы не перекрывать сам проход). 0 = не запрещать.")] private int coverEntranceForbiddenRadius = 1;
-
-    [Header("Укрытия — двойные блоки")]
-    [SerializeField, Tooltip("Вероятность постановки двойного укрытия (2 клетки рядом). При 0 — только одиночные. При 1 — всегда двойные если есть подходящий сосед.")] private FloatRange coverMultiCellChance = new FloatRange(0.25f, 0.45f);
-    [SerializeField, Min(1), Tooltip("Минимальный вес соседней клетки, чтобы она стала второй частью двойного укрытия.")] private int coverMultiCellNeighborMinWeight = 1;
-
-    [Header("Укрытия — ограничения")]
-    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями.")] private float coverMaxFillRatio = 0.25f;
+    [Header("Укрытия в зонах (Site / Neutral / Room / Spawn)")]
+    [SerializeField, Min(1), Tooltip("Минимальный счётчик входов, из которых клетка должна просматриваться.")] private int coverMinEntranceVisibility = 1;
+    [SerializeField, Range(0f, 1f), Tooltip("Случайный шум к весу. 0 = детерминировано, 0.2 = лёгкое разнообразие.")] private float coverRandomBias = 0.2f;
+    [SerializeField, Min(0), Tooltip("Запрет cover в N клетках от входа в зону.")] private int coverEntranceForbiddenRadius = 1;
+    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями.")] private float coverMaxFillRatio = 0.20f;
     [SerializeField, Min(0), Tooltip("Жёсткий лимит укрытий на одну зону. 0 — без лимита.")] private int coverMaxPerZone = 0;
-    [SerializeField, Min(1), Tooltip("Минимальное расстояние Чебышёва между двумя укрытиями.")] private int coverMinSpacing = 2;
+    [SerializeField, Range(0.01f, 1f), Tooltip("Стоп когда максимальный вес упал ниже X% от начального. 0.45 = Valorant-плотность, 0.1 = плотнее.")] private float coverStopFraction = 0.45f;
+    [SerializeField, Tooltip("Вероятность двойного укрытия (2 клетки рядом).")] private FloatRange coverMultiCellChance = new FloatRange(0.25f, 0.45f);
+
+    [Header("Укрытия на дорогах (Main / Link)")]
+    [SerializeField, Tooltip("Диапазон позиций вдоль пути. Концы исключены — там входы в зоны.")] private FloatRange roadCoverRange = new FloatRange(0.20f, 0.80f);
+    [SerializeField, Tooltip("Количество укрытий на один отрезок пути. Алгоритм выбирает наиболее открытые точки.")] private IntRange roadCoversPerPath = new IntRange(1, 3);
+    [SerializeField, Range(0f, 1f), Tooltip("Вероятность, что отрезок пути вообще получит укрытие.")] private float roadCoverChance = 0.75f;
+    [SerializeField, Min(1), Tooltip("Минимальная дальность обзора по горизонтали/вертикали (в клетках) для постановки cover. 2 = почти любое открытое место, 4 = только длинные прямые.")] private int roadCoverMinExposure = 2;
 
     // Логическая сетка карты: тип каждой клетки. Empty = снаружи карты (нет ничего).
     private BlockType[,] cellTypes;
@@ -160,7 +163,8 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Main,
         BlockType.Link,
         BlockType.Neutral,
-        BlockType.Room
+        BlockType.Room,
+        BlockType.Pocket
     };
 
     private static readonly BlockType[] CoverZones =
@@ -179,7 +183,8 @@ public partial class MapGenerator : MonoBehaviour
         BlockType.Main,
         BlockType.Link,
         BlockType.Neutral,
-        BlockType.Room
+        BlockType.Room,
+        BlockType.Pocket
     };
 
     private int nextZoneId;
@@ -352,6 +357,8 @@ public partial class MapGenerator : MonoBehaviour
                 return neutralMaterial;
             case BlockType.Room:
                 return roomMaterial;
+            case BlockType.Pocket:
+                return pocketMaterial != null ? pocketMaterial : roomMaterial;
             default:
                 return null;
         }
@@ -503,7 +510,8 @@ public partial class MapGenerator : MonoBehaviour
         // Приоритеты: Spawn/Site/Neutral нельзя перезаписать дорогами и комнатами.
         BlockType currentType = cellTypes[x, z];
         if ((currentType == BlockType.Spawn || currentType == BlockType.Site || currentType == BlockType.Neutral) &&
-            (type == BlockType.Main || type == BlockType.Link || type == BlockType.Road || type == BlockType.Room))
+            (type == BlockType.Main || type == BlockType.Link || type == BlockType.Road ||
+             type == BlockType.Room || type == BlockType.Pocket))
         {
             return false;
         }
