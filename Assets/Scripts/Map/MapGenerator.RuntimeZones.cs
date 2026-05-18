@@ -114,10 +114,11 @@ public partial class MapGenerator
     MapZoneComponent InstantiateZoneForRegion(ZoneRegion region)
     {
         GameObject zoneObject = new GameObject($"{region.Type}Zone_{nextZoneId}");
-        zoneObject.transform.SetParent(transform, false);
+        zoneObject.transform.SetParent(zonesRoot, false);
         zoneObject.transform.position = region.GetCenterWorld(blockSize);
 
         BoxCollider boxCollider = zoneObject.AddComponent<BoxCollider>();
+        boxCollider.isTrigger = true; // зона — это логическая разметка, не физика
         boxCollider.size = new Vector3(
             (region.Max.x - region.Min.x + 1) * blockSize,
             Mathf.Max(0.1f, blockSize * 0.5f),

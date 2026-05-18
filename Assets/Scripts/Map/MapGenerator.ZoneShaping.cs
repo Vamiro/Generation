@@ -196,7 +196,7 @@ public partial class MapGenerator
         // Превращаем клетку в стену (чтобы перекрыть линию visibility) только если её ещё не отметили.
         // Для режима Cover оставляем тип дороги, но вешаем сверху префаб укрытия.
         Vector3 worldPos = new Vector3(candidate.Outside.x * blockSize, blockSize, candidate.Outside.y * blockSize);
-        Instantiate(coverPrefab, worldPos, Quaternion.identity, transform);
+        Instantiate(coverPrefab, worldPos, Quaternion.identity, geometryRoot);
     }
 
     // ───── Стена между Room и Site ────────────────────────────────────────────

@@ -63,6 +63,7 @@
 Assets/Scripts/
 ├── Core/
 │   ├── GameManager.cs           — раунд, тайминги, перезапуск, метрики
+│   ├── MatchManager.cs          — спавн/остановка матча по хоткеям W/S  ← NEW
 │   ├── Storage.cs               — JSON I/O в persistentDataPath
 │   └── StorageData.cs           — обобщённая база для сохраняемых данных
 │
@@ -77,6 +78,7 @@ Assets/Scripts/
 │   ├── MapGenerator.RuntimeZones.cs   ★ partial: извлечение регионов, инстанцирование MapZoneComponent
 │   ├── MapGenerator.Validation.cs     ★ partial: проверки достижимости (BFS)
 │   ├── MapGenerator.Rooms.cs          ★ partial: PlaceRooms() — галереи вдоль main-дорог  ← NEW
+│   ├── MapGenerator.NavMesh.cs        ★ partial: RebuildNavMesh() — runtime-бейк на Geometry  ← NEW
 │   ├── MapGenerator.Covers.cs         ★ partial: расстановка укрытий (отключена, в работе)
 │   └── Zones/
 │       ├── SpawnZoneComponent.cs      — пустой маркер
@@ -152,6 +154,7 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
 ### 4.2 Пайплайн генерации (`MapGenerator.GenerateMap`)
 
 ```
+[0] InitializeContainers             — создаёт Geometry/ и Zones/ как children генератора
 [1] InitializeZoneCollections        — пустые сеты для zoneBlocks
 [2] InitializeCellGrid               — все клетки = Empty, инстансов нет
 [3] MarkZones                        — рисуем зоны и дороги (пути main сохраняются в mainRoadPaths):
@@ -163,18 +166,32 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
         ├── BuildAttackerLinks       ──→ A* attackerSpawn↔neutralCenter, тип Link
         ├── BuildDefenderLink        ──→ A* defenderSpawn↔neutralCenter, тип Link
         └── BuildNeutralToSiteLinks  ──→ A* neutralCenter↔siteEntry, тип Link
-[3.5] PlaceRooms                     — галереи вдоль main-дорог (из mainRoadPaths) ← NEW
+[3.5] PlaceRooms                     — галереи вдоль main-дорог (из mainRoadPaths)
 [4] ShapeZoneEnclosures              — для каждой Site/Neutral/Spawn/Room:
                                        сужает дорожные «выходы» до maxEntranceWidth клеток,
                                        лишнее → Wall или префаб укрытия
 [5] ValidateGeneratedLayout          — BFS: spawn→site→neutral достижимы?
 [6] BuildAndRegisterZoneObjects      — флуд-филл регионов в RuntimeZones,
-                                       создаёт MapZoneComponent + регистрирует в MapManager
+                                       создаёт MapZoneComponent в Zones/ + регистрирует в MapManager
 [7] UpdateMap                        — выставляет материалы полам
 [8] BuildOuterWalls                  — расширение Empty-границы вокруг floor на outerWallThickness;
-                                       все Wall-клетки → колонны блоков высотой outerWallHeight
-[9] PlaceCovers (если enableCovers)  — расстановка укрытий внутри зон (в работе)
+                                       все Wall-клетки → колонны блоков высотой outerWallHeight в Geometry/
+[9] PlaceCovers (если enableCovers)  — расстановка укрытий внутри зон в Geometry/
+[10] RebuildNavMesh                  — runtime-бейк NavMeshSurface на Geometry/  ← NEW
 ```
+
+**Иерархия объектов карты (children генератора):**
+
+```
+MapGenerator
+ ├── Geometry/        ← вся физика: пол, стены, укрытия. Здесь же висит NavMeshSurface.
+ └── Zones/           ← MapZoneComponent (Spawn/Site/Neutral/Road/Room/Pocket). Триггер-коллайдеры.
+```
+
+Разделение позволяет:
+- NavMesh бейкать только по реальной геометрии (`NavMeshSurface.collectObjects = Children`).
+- Зоны иметь триггер-коллайдеры для bounds — они не блокируют ботов.
+- При R-регенерации оба контейнера уничтожаются вместе с children и создаются заново.
 
 ### 4.3 Слой Layout (`MapGenerator.Layout.cs`)
 
@@ -284,6 +301,20 @@ A* с учётом штрафов и предпочтений.
 
 Инварианты `CanPlaceRoom`: комната не может перекрывать Spawn/Site/Neutral/Wall, и должна быть минимум `outerWallThickness` клеток от края карты (гарантия места для внешней стены).
 
+### 4.8.1 Слой NavMesh (`MapGenerator.NavMesh.cs`)
+
+`RebuildNavMesh()` запускается последним шагом `GenerateMap()`. На `Geometry/` лениво вешается `NavMeshSurface` (`Unity.AI.Navigation`) с настройками:
+
+- `collectObjects = Children` — собирает только children контейнера Geometry.
+- `useGeometry = PhysicsColliders` — бейк по коллайдерам пола/стен/укрытий.
+- `agentTypeID` — параметр в инспекторе (по умолчанию 0 = Humanoid). Должен совпадать с `NavMeshAgent.agentTypeID` у `Bot.prefab`.
+
+Параметры:
+- `buildNavMesh` (bool) — выключить можно в дебаг-целях.
+- `navMeshAgentTypeId` — int, как в Window/AI/Navigation/Agents.
+
+При R-регенерации контейнер `Geometry/` уничтожается вместе с `NavMeshSurface`, и при следующей генерации компонент пересоздаётся. `MatchManager.StartLoop()` отказывается стартовать, если в сцене нет ни одной NavMesh-триангуляции (цикл сразу выключается с ошибкой в лог).
+
 ### 4.9 Слой Covers (`MapGenerator.Covers.cs`)
 
 **Сейчас отключён** (`enableCovers = false` по умолчанию). Будет переписан после финализации комнат (см. roadmap).
@@ -305,7 +336,7 @@ A* с учётом штрафов и предпочтений.
 
 ### 4.10 Регенерация карты
 
-`Update`: при нажатии **R** запускается `RegenerateMapRoutine`. Уничтожает всех children генератора, чистит `MapManager.ClearZones()`, ждёт кадр, вызывает `GenerateMap`.
+`Update`: при нажатии **R** запускается `RegenerateMapRoutine`. Если в сцене найден `MatchManager` — сначала `StopLoop()` (иначе боты держат ссылки на разрушаемые зоны, а NavMesh под ними тоже исчезает). Затем уничтожает всех children генератора, чистит `MapManager.ClearZones()`, ждёт кадр, вызывает `GenerateMap`.
 
 ### 4.11 Сид и воспроизводимость
 
@@ -352,6 +383,56 @@ A* с учётом штрафов и предпочтений.
 ### `DefenderTeamManager`
 - Распределение: по 2 защитника на каждый сайт + 1 Scout.
 - Каждые `_delay = 10` сек случайно репозиционирует часть защитников ближе к Main или Link (имитация ротации).
+
+---
+
+## 6.1. Модуль: MatchManager (цикл матчей)
+
+`MatchManager` (`MonoSingleton`) владеет жизненным циклом матчей. Реализован как state-машина:
+
+```
+Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cooldown ──▶ Running ──▶ ...
+  ▲                                                          │
+  └──────────── S / R / maxMatches reached ─────────────────┘
+```
+
+**Состояния:**
+- `Idle` — цикл выключен, команд/ботов на сцене нет.
+- `Running` — идёт матч. `AttackerTeamManager` и `DefenderTeamManager` живут как children `MatchManager`.
+- `Cooldown` — ждём `betweenMatchesDelay` секунд после конца матча. Команды уже уничтожены.
+
+**Условия конца матча (`Running` → `Cooldown`):**
+- `LiveBotsCount` одной из команд == 0 → победа другой.
+- `elapsed >= matchTimeout` → ничья.
+
+**Хоткеи:**
+
+| Клавиша | Действие | Кто обрабатывает |
+|---|---|---|
+| **W** | `StartLoop()` — включает цикл и сразу запускает первый матч. Игнорируется, если цикл уже идёт. | `MatchManager` |
+| **S** | `StopLoop()` — выключает цикл, уничтожает команды/ботов. Карта не трогается. | `MatchManager` |
+| **R** | Перегенерация карты. Перед регенерацией вызывает `MatchManager.StopLoop()` (через `FindObjectOfType`, без ленивого создания). | `MapGenerator` |
+
+**Параметры в инспекторе:**
+- `botPrefab` — префаб бота с `BotComponent` и `NavMeshAgent`.
+- `botsPerTeam` — состав каждой команды (по умолчанию 5).
+- `snapSpawnToNavMesh`, `navMeshSampleRadius` — спавнить бота строго на NavMesh.
+- `matchTimeout` — максимум секунд на матч (ничья).
+- `betweenMatchesDelay` — пауза между матчами в `Cooldown`.
+- `maxMatches` — лимит серии (0 = бесконечно). По достижении — цикл выключается сам.
+
+**Read-only в инспекторе:** `matchesPlayed`, `currentState` — для дебага серии.
+
+**Спавн команд:**
+- Спавн с бо́льшим Z считается атакерским (соответствует `MapGenerator.Layout.PlaceSpawnZones`).
+- Боты инстанцируются из `botPrefab`, родителем становится `TeamManager.gameObject` (children менеджера команды).
+- При конце матча `Destroy(teamManager.gameObject)` — дети-боты уходят вместе с ним.
+- `StartLoop` валидирует условия: наличие префаба, минимум 2 SpawnZone, наличие NavMesh-триангуляции. При сбое цикл выключается и логируется ошибка.
+
+**Изменения в `TeamManager`:**
+- `TeamManager.Update` больше **не** запускает `GameManager.RestartGame` при пустом `bots` — это конфликтовало с loop-логикой. Update пустой (виртуальный, для подклассов).
+- Добавлено свойство `LiveBotsCount` (счёт ненулевых ссылок в `bots`), которым `MatchManager` определяет конец матча.
+- `SetBots(List<BotComponent>)` и `SetOtherTeam(TeamManager)` — для заполнения состава из кода. Поле `bots` остаётся `[SerializeField]` для инспекторного сценария (`SampleScene`).
 
 ---
 

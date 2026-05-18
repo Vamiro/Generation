@@ -664,7 +664,7 @@ public partial class MapGenerator
         for (int level = 0; level < levels; level++)
         {
             Vector3 pos = new Vector3(cell.x * blockSize, blockSize + level * blockSize, cell.y * blockSize);
-            Instantiate(coverPrefab, pos, Quaternion.identity, transform);
+            Instantiate(coverPrefab, pos, Quaternion.identity, geometryRoot);
         }
     }
 }

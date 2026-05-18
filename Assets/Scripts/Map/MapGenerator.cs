@@ -146,6 +146,15 @@ public partial class MapGenerator : MonoBehaviour
     // Пути link-дорог — нужны для комнат на mid/link.
     private List<List<Vector2Int>> linkPaths = new();
 
+    // Корни иерархии: физическая геометрия (пол/стены/укрытия) и логические зоны для ботов.
+    // Создаются в InitializeContainers() при каждой генерации. R-регенерация уничтожает их и
+    // пересоздаёт. Это разделение нужно, чтобы NavMeshSurface, лежащий на Geometry, бейкал
+    // только реальные коллайдеры карты, а зоны (BoxCollider у MapZoneComponent) не мешали.
+    private Transform geometryRoot;
+    private Transform zonesRoot;
+    public Transform GeometryRoot => geometryRoot;
+    public Transform ZonesRoot => zonesRoot;
+
     private Vector2Int attackerSpawn, defenderSpawn;
     private Vector2Int siteA, siteB;
     // Размеры зон по X и Z (Vector2Int.x — ширина, Vector2Int.y — высота).
@@ -218,6 +227,15 @@ public partial class MapGenerator : MonoBehaviour
             Selection.activeGameObject = gameObject;
 #endif
 
+        // Перед сменой карты обязательно гасим цикл матчей — иначе боты держат
+        // ссылки на разрушаемые зоны, а NavMesh под ними тоже исчезает.
+        // StopLoop полностью сбрасывает state-машину (Idle), включая Cooldown.
+        // FindObjectOfType, а не Instance — чтобы не создавать менеджер ленивым геттером,
+        // если его в сцене нет.
+        var existing = FindObjectOfType<MatchManager>();
+        if (existing != null)
+            existing.StopLoop();
+
         MapManager mapManager = MapManager.Instance;
         if (mapManager != null)
             mapManager.ClearZones();
@@ -239,6 +257,7 @@ public partial class MapGenerator : MonoBehaviour
         currentGenerationSeed = ResolveGenerationSeed();
         Random.InitState(currentGenerationSeed);
 
+        InitializeContainers();
         InitializeZoneCollections();
         InitializeCellGrid();
 
@@ -262,6 +281,23 @@ public partial class MapGenerator : MonoBehaviour
 
         if (enableCovers)
             PlaceCovers();
+
+        // Финальный шаг: запекаем NavMesh по геометрии. Делается ПОСЛЕ ВСЕХ stage-ов,
+        // которые создают коллайдеры (стены, укрытия, choke-блоки).
+        RebuildNavMesh();
+    }
+
+    void InitializeContainers()
+    {
+        // Контейнеры пересоздаются на каждой генерации (вызывается из GenerateMap).
+        // Старые children уничтожаются в RegenerateMapRoutine ещё до сюда.
+        GameObject geomGO = new GameObject("Geometry");
+        geomGO.transform.SetParent(transform, false);
+        geometryRoot = geomGO.transform;
+
+        GameObject zonesGO = new GameObject("Zones");
+        zonesGO.transform.SetParent(transform, false);
+        zonesRoot = zonesGO.transform;
     }
 
     int ResolveGenerationSeed()
@@ -493,7 +529,7 @@ public partial class MapGenerator : MonoBehaviour
         for (int level = 0; level < levels; level++)
         {
             Vector3 pos = new Vector3(x * blockSize, level * blockSize, z * blockSize);
-            BlockComponent wallBlock = Instantiate(wallPrefab, pos, Quaternion.identity, transform);
+            BlockComponent wallBlock = Instantiate(wallPrefab, pos, Quaternion.identity, geometryRoot);
             wallBlock.blockType.Set(BlockType.Wall);
             if (wallMaterial != null && wallBlock.Renderer != null)
                 wallBlock.Renderer.material = wallMaterial;
@@ -533,7 +569,7 @@ public partial class MapGenerator : MonoBehaviour
             if (floorInstances[x, z] == null)
             {
                 Vector3 pos = new Vector3(x * blockSize, 0f, z * blockSize);
-                floorInstances[x, z] = Instantiate(floorPrefab, pos, Quaternion.identity, transform);
+                floorInstances[x, z] = Instantiate(floorPrefab, pos, Quaternion.identity, geometryRoot);
             }
 
             BlockComponent floor = floorInstances[x, z];

@@ -35,11 +35,24 @@ public abstract class TeamManager : MonoBehaviour
         }
     }
 
+    // Жизненный цикл матча (старт/стоп/проверка победы/респавн) принадлежит MatchManager.
+    // TeamManager.Update раньше сам звал GameManager.RestartGame при пустом bots — это
+    // конфликтовало с loop-логикой, поэтому теперь Update ничего не делает.
     public virtual void Update()
     {
-        if (bots.Count != 0) return;
-        Debug.Log($"{otherTeam.name} has won!");
-        GameManager.Instance.RestartGame();
+    }
+
+    // Удалит из bots всех уже уничтоженных компонентов (на случай гонки между Die() и Update).
+    public int LiveBotsCount
+    {
+        get
+        {
+            if (bots == null) return 0;
+            int n = 0;
+            foreach (var b in bots)
+                if (b != null) n++;
+            return n;
+        }
     }
     
     public void NotifyDefenders(MapZoneComponent site)

@@ -36,7 +36,17 @@ public class BotComponent : MonoBehaviour
         agent.speed = speed;
     }
     
-    public bool IsOnPosition => agent.remainingDistance < 0.01f;
+    // remainingDistance валиден только пока агент на NavMesh, путь рассчитан и не в pendingPath.
+    // Иначе Unity бросает варнинг "GetRemainingDistance can only be called on an active agent...".
+    public bool IsOnPosition
+    {
+        get
+        {
+            if (agent == null || !agent.isOnNavMesh) return false;
+            if (agent.pathPending) return false;
+            return agent.remainingDistance < 0.01f;
+        }
+    }
 
     private void Start()
     {
@@ -49,9 +59,7 @@ public class BotComponent : MonoBehaviour
 
     private void Update()
     {
-        //if (agent.remainingDistance < 0.01f && _currentZone)
-            //agent.destination = _currentZone.GetRandomPointInZone();
-
+        if (_teamManager == null) return;
         if (!_target) return;
         _currentReactionTime += Time.deltaTime;
 
@@ -63,6 +71,7 @@ public class BotComponent : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (_teamManager == null || _teamManager.OtherTeam == null) return;
         foreach (var bot in _teamManager.OtherTeam.Bots)
         {
             var ray = new Ray(transform.position, bot.transform.position - transform.position);
@@ -79,10 +88,8 @@ public class BotComponent : MonoBehaviour
     public void MoveToZone(MapZoneComponent zone)
     {
         _currentZone = zone;
-        if (zone != null)
-        {
-            agent.SetDestination(zone.GetRandomPointInZone());
-        }
+        if (zone == null || agent == null || !agent.isOnNavMesh) return;
+        agent.SetDestination(zone.GetRandomPointInZone());
     }
 
     public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
@@ -130,10 +137,14 @@ public class BotComponent : MonoBehaviour
 
         GameManager.Instance.SaveDeathPosition(transform.position);
         GameManager.Instance.IncreaseDeathCount();
-        _teamManager.Bots.Remove(this);
-        var spawnDeathEffect = new Vector3(transform.position.x, 50f, transform.position.z);
-        var obj = Instantiate(deathEffect, spawnDeathEffect, Quaternion.identity);
-        DontDestroyOnLoad(obj);
+        if (_teamManager != null)
+            _teamManager.Bots.Remove(this);
+        if (deathEffect != null)
+        {
+            var spawnDeathEffect = new Vector3(transform.position.x, 50f, transform.position.z);
+            var obj = Instantiate(deathEffect, spawnDeathEffect, Quaternion.identity);
+            DontDestroyOnLoad(obj);
+        }
         Destroy(gameObject);
     }
 }
