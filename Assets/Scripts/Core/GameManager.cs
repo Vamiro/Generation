@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 public class DeathData : StorageData<DeathData>
@@ -7,47 +6,22 @@ public class DeathData : StorageData<DeathData>
     public List<Vector3> DeathPositions = new List<Vector3>();
 }
 
+// Лёгкий компонент: только сбор метрики смертей + сохранение на выход.
+// Жизненным циклом матчей, time scale и таймаутами раундов теперь владеет MatchManager.
+// Старая логика SceneManager.LoadScene по таймеру убрана — она конфликтовала с
+// match loop (приводила к спонтанной перезагрузке сцены между матчами).
 public class GameManager : MonoSingleton<GameManager>
 {
-    [SerializeField] private float timeScale = 1f;
-    [SerializeField] private float roundTime = 120f;
-    
-    private float _deathCount;
-    private float _currentTime;
-    
-    private void Start()
-    {
-        Time.timeScale = timeScale;
-    }
-
-    private void Update()
-    {
-        _currentTime += Time.deltaTime;
-        if (!(_currentTime >= roundTime / timeScale)) return;
-        _currentTime = 0;
-        RestartGame();
-    }
-
-    public void RestartGame()
-    {
-        if (_deathCount > 5000)
-        {
-            Time.timeScale = 0f;
-            return;
-        }
-        UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
-    }
-    
     public void SaveDeathPosition(Vector3 position)
     {
         DeathData.Instance.DeathPositions.Add(position);
     }
-    
+
     public void SaveDeathPositions()
     {
         DeathData.Instance.Save();
     }
-    
+
     private void OnApplicationQuit()
     {
         SaveDeathPositions();
@@ -58,8 +32,9 @@ public class GameManager : MonoSingleton<GameManager>
         SaveDeathPositions();
     }
 
+    // Совместимость со старыми вызовами BotComponent.Die — счётчик больше нигде не читается,
+    // но метод оставлен, чтобы не править все Die() и не плодить null-чеки.
     public void IncreaseDeathCount()
     {
-        _deathCount++;
     }
 }

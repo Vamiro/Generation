@@ -433,7 +433,7 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 **Read-only в инспекторе:** `matchesPlayed`, `currentState` — для дебага серии.
 
 **Спавн команд:**
-- Спавн с бо́льшим Z считается атакерским (соответствует `MapGenerator.Layout.PlaceSpawnZones`).
+- Спавн с **меньшим** Z считается атакерским — это соответствует `MapGenerator.Layout.PlaceSpawnZones`, где `attackerZ = innerPadding + halfZ` (нижняя кромка карты), а `defenderZ = height - 1 - innerPadding - ...` (верхняя кромка). Если меняете геометрию спавнов в Layout — синхронно правьте сравнение в `MatchManager.TryStartMatch`.
 - Боты инстанцируются из `botPrefab`, родителем становится `TeamManager.gameObject` (children менеджера команды).
 - При конце матча `Destroy(teamManager.gameObject)` — дети-боты уходят вместе с ним.
 - `StartLoop` валидирует условия: наличие префаба, минимум 2 SpawnZone, наличие NavMesh-триангуляции. При сбое цикл выключается и логируется ошибка.
@@ -448,11 +448,19 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 ## 7. Модуль: Storage / GameManager
 
 ### `GameManager`
-- `timeScale` — ускорение симуляции.
-- `roundTime` — длительность раунда (с учётом `timeScale`).
-- При истечении раунда / уничтожении одной из команд → перезагружает сцену через `SceneManager.LoadScene`.
-- При смерти бота сохраняет позицию в `DeathData.Instance.DeathPositions`.
-- Аварийный стоп: если `_deathCount > 5000` — ставит `Time.timeScale = 0`.
+Лёгкий компонент. Отвечает только за сбор метрики смертей и сохранение на выход:
+- `SaveDeathPosition(Vector3)` — записать в `DeathData.Instance.DeathPositions`.
+- `SaveDeathPositions()` — записать `DeathData` в Storage. Зовётся автоматически на `OnApplicationQuit` и `OnDestroy`.
+- `IncreaseDeathCount()` — оставлен пустым для обратной совместимости со старыми вызовами.
+
+Что **удалено** (раньше тут было, теперь нет):
+- `Update`-таймер `roundTime` и вызов `RestartGame` → перезагрузки сцены. Конфликтовал с `MatchManager.matchTimeout` и приводил к спонтанному перезапуску всей сцены посреди серии. Жизненным циклом матчей и `Time.timeScale` теперь владеет **только** `MatchManager` (см. 6.1, «Скорость симуляции»).
+- Поля `timeScale`, `roundTime` в `GameManager` — убраны.
+- Аварийный стоп по `_deathCount > 5000` — убран (`maxMatches` в `MatchManager` выполняет эту роль).
+
+### `BotComponent.Die` — метки смертей
+- Префаб `deathEffect` инстанцируется как child ленивого GameObject **`DeathMarkers`** в корне сцены (`GameObject.Find("DeathMarkers")` → создание при первой смерти).
+- `DontDestroyOnLoad` **не используется** — старый код висел в persistent-иерархии и тёк. Теперь метки переживают R-регенерацию карты (т.к. `DeathMarkers` не child мап-генератора), но удаляются вместе со сценой.
 
 ### `Storage`
 - JSON I/O в `Application.persistentDataPath/Storage/*.json`.
@@ -484,7 +492,7 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 | Расстановка укрытий нестабильна | `MapGenerator.Covers.cs` | в активной переработке |
 | Комнаты есть только тип «галерея», нет перекрёстков и ниш | `MapGenerator.Rooms.cs` | Следующая итерация Этапа 1 |
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
-| Нет batch-симуляций | `GameManager.RestartGame` просто перезагружает сцену | Этап 5 roadmap |
+| Нет batch-симуляций | `MatchManager` гоняет матчи в одной сцене (`maxMatches`), но без сбора per-match метрик в Storage | Этап 5 roadmap |
 | Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
 | Метрики только смерти | `DeathData` | расширить: win-rate, длительность раунда, маршруты |

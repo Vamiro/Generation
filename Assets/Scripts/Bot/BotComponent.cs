@@ -1,5 +1,3 @@
-using System;
-using System.Linq;
 using UnityEngine;
 using UnityEngine.AI;
 using Random = UnityEngine.Random;
@@ -167,8 +165,28 @@ public class BotComponent : MonoBehaviour
         {
             var spawnDeathEffect = new Vector3(transform.position.x, 50f, transform.position.z);
             var obj = Instantiate(deathEffect, spawnDeathEffect, Quaternion.identity);
-            DontDestroyOnLoad(obj);
+            obj.transform.SetParent(GetOrCreateDeathMarkersRoot(), worldPositionStays: true);
         }
         Destroy(gameObject);
+    }
+
+    // Лениво создаёт контейнер "DeathMarkers" в корне сцены. Не child мап-генератора —
+    // чтобы метки переживали R-регенерацию карты. И НЕ DontDestroyOnLoad —
+    // чтобы не утекали между сценами и не засоряли persistent-иерархию.
+    private static Transform _deathMarkersRoot;
+    private static Transform GetOrCreateDeathMarkersRoot()
+    {
+        if (_deathMarkersRoot != null)
+            return _deathMarkersRoot;
+
+        var existing = GameObject.Find("DeathMarkers");
+        if (existing != null)
+        {
+            _deathMarkersRoot = existing.transform;
+            return _deathMarkersRoot;
+        }
+
+        _deathMarkersRoot = new GameObject("DeathMarkers").transform;
+        return _deathMarkersRoot;
     }
 }

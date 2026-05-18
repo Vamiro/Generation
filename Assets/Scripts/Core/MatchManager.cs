@@ -279,9 +279,11 @@ public class MatchManager : MonoSingleton<MatchManager>
             return;
         }
 
-        // Атакер — спавн с бо́льшим Z (см. MapGenerator.Layout.PlaceSpawnZones).
+        // Атакер — спавн с МЕНЬШИМ Z, защитник — с бо́льшим. См. MapGenerator.Layout.PlaceSpawnZones:
+        //   attackerZ = innerPadding + halfZ              (нижняя кромка карты)
+        //   defenderZ = height - 1 - innerPadding - ...   (верхняя кромка карты)
         SpawnZoneComponent attackerZone, defenderZone;
-        if (spawnZones[0].transform.position.z >= spawnZones[1].transform.position.z)
+        if (spawnZones[0].transform.position.z <= spawnZones[1].transform.position.z)
         {
             attackerZone = spawnZones[0];
             defenderZone = spawnZones[1];
