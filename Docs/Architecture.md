@@ -360,23 +360,35 @@ A* с учётом штрафов и предпочтений.
 
 ## 5. Модуль: Bots
 
-`BotComponent` — простой агент.
+`BotComponent` — параметризованный агент. Все поведенческие магические значения вынесены в `[SerializeField]` с русскими тултипами; на этапе E дорожной карты они переедут в `BotProfile` (ScriptableObject) — это нужно для воспроизводимой автокалибровки (ВКР, разд. 11.1).
 
 Атрибуты:
-- `NavMeshAgent` для передвижения.
+- `NavMeshAgent` для передвижения. В `Awake` ставится `agent.updateRotation = false` — поворот контролирует сам бот, чтобы "целиться" в неподвижного врага даже после остановки агента.
 - `role` (Attacker / Defender / Flanker / Scout).
-- `reactionTime`, `chanceToShoot` — параметры боя.
+- **Бой — реакция и темп:** `reactionTime`, `chanceToShoot` (база).
+- **Бой — HP:** `maxHealth`, `damagePerShot`. Один выстрел больше **не** = смерть — это убирает one-shot и делает бой менее случайным.
+- **Прицеливание:** `aimTurnSpeed` (град/сек), `aimAngleTolerance` (град) — стрельба разрешена только если ствол смотрит на цель в пределах допуска.
+- **Выбор цели:** `sightRange`, `distancePriorityWeight`, `threatPriorityBonus`.
+- **Reposition tick:** `repositionDelay`, `repositionJitter` — таймер, после которого бот в режиме idle меняет точку в текущей зоне.
 - `deathEffect` — префаб эффекта смерти.
 
 Поведение (`Update` + `FixedUpdate`):
-- В `FixedUpdate` для каждого бота вражеской команды бросает рейкаст. Если первое попадание — этот бот, фиксирует как `_target`.
-- В `Update` после `reactionTime` совершает выстрел: рейкаст в цель, проверка `chanceToShoot`, если попало — цель `Die()`.
-- На `Die()` уведомляет вражескую команду о смене целевого сайта (через `TeamManager.NotifyDefenders`), сохраняет точку смерти в `GameManager`, удаляется.
+- `FixedUpdate`: для каждого живого врага считается `score = distance * distancePriorityWeight − (целится в нас ? threatPriorityBonus : 0)`. Цель = минимальный score среди тех, кто в `sightRange` и в LOS. Это устраняет старый баг "цель = последний в цикле" и даёт детерминированный приоритет.
+- `Update` — две ветки:
+  - **Бой** (`_target != null`): сначала `FaceTarget()` (поворот к цели через `Quaternion.RotateTowards`), затем после `reactionTime` и только если `IsAimedAtTarget()` — `Shoot()`. Выстрел повторно проверяет LOS, бросает `Random.value > chanceToShoot`, при попадании зовёт `victim.ReceiveDamage(damagePerShot)`. Цель **не** обнуляется после успешного выстрела — добиваем, пока жертва жива и в LOS.
+  - **Idle** (`_target == null`): `HandleIdleReposition()` копит таймер только пока `IsOnPosition`. По достижении `repositionDelay × (1 ± jitter)` — `agent.SetDestination(_currentZone.GetRandomPointInZone())`. Это убирает "застывание" атакеров на сайте и защитников на одной точке после первого `MoveToZone`.
+- `ReceiveDamage(int)` — публичный API. На этапе B будет вызываться `HitModel`-ом с уроном, рассчитанным от дистанции/укрытий. Сейчас зовётся самим `Shoot()`.
+- `Die()` отрабатывает при `_currentHealth ≤ 0`: уведомляет вражескую команду о смене целевого сайта (`TeamManager.NotifyDefenders`), сохраняет точку смерти в `GameManager`, шлёт `MatchStatsCollector.OnBotDied`, удаляется.
 
-**Ограничения текущей модели:**
-- Нет понятия здоровья, кд оружия, экономики, способностей.
-- Нет «прятания за укрытием» (LOS блокируется только статичной геометрией стен).
-- Нет звуковых сигналов, флешек и т.п.
+**Гарантии для воспроизводимости (важно для калибровки):**
+- Все случайности (`Random.value` в `Shoot()`, jitter в `ScheduleNextReposition`) используют `UnityEngine.Random` — попадают под `Random.InitState(currentGenerationSeed)`, выставленный `MapGenerator`-ом.
+- Скоринг цели детерминирован при равных входах (нет `Random` в `PickBestTarget`).
+
+**Текущие ограничения (этапы B–F дорожной карты):**
+- `chanceToShoot` — пока константа, не зависит от дистанции/укрытия/движения цели (этап B: `HitModel`).
+- Нет тактических слотов в зоне — `repositionDelay` гоняет бота по случайным точкам в `GetRandomPointInZone()` (этап C: `TacticalSlot`).
+- Нет событийной шины (защитник не реагирует на "пуш атакеров", пока кто-то не умрёт) — этап D.
+- Параметры пока в полях `BotComponent`, а не в `BotProfile` SO — этап E.
 
 ---
 
@@ -551,7 +563,7 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
 | Нет batch-симуляций | `MatchManager` гоняет серию матчей (`maxMatches`) + headless-режим, `MatchStatsCollector` пишет per-match метрики в Storage. Не хватает только runner-а по списку карт (param sweep). | Этап 5 roadmap |
 | Метрики только смерти + per-match агрегаты | `DeathData` (координаты) + `StatsData` (исход, длительность, kill-zones) | следующий шаг — kill-heatmap из StatsData |
-| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap |
+| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этап A переработки ботов (HP, поворот к цели, scoring цели, reposition tick) — **выполнен**, см. раздел 5. |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
 
 ---
