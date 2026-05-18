@@ -59,8 +59,10 @@ public class BotComponent : MonoBehaviour
 
     private void Update()
     {
+        // Все ссылки проверяем Unity-null-safe (==), потому что MonoBehaviour может
+        // быть "фейково" уничтожен между кадрами.
         if (_teamManager == null) return;
-        if (!_target) return;
+        if (_target == null) return;
         _currentReactionTime += Time.deltaTime;
 
         if (!(_currentReactionTime >= reactionTime)) return;
@@ -71,16 +73,24 @@ public class BotComponent : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (_teamManager == null || _teamManager.OtherTeam == null) return;
-        foreach (var bot in _teamManager.OtherTeam.Bots)
+        if (_teamManager == null) return;
+        TeamManager other = _teamManager.OtherTeam;
+        if (other == null) return;
+
+        var enemyBots = other.Bots;
+        if (enemyBots == null) return;
+
+        for (int i = 0; i < enemyBots.Count; i++)
         {
+            BotComponent bot = enemyBots[i];
+            // Destroyed-боты могут лежать в списке между смертью и Bots.Remove(this).
+            if (bot == null) continue;
+
             var ray = new Ray(transform.position, bot.transform.position - transform.position);
             if (!Physics.Raycast(ray, out var hit, 1000f)) continue;
-
-            if (hit.collider.gameObject != bot.gameObject) continue;
+            if (hit.collider == null || hit.collider.gameObject != bot.gameObject) continue;
 
             _target = bot;
-
             Debug.DrawLine(transform.position, bot.transform.position, Color.red);
         }
     }
@@ -105,10 +115,12 @@ public class BotComponent : MonoBehaviour
     
     private void Shoot()
     {
+        if (_target == null) return;
+
         var ray = new Ray(transform.position, _target.transform.position - transform.position);
 
         if (!Physics.Raycast(ray, out var hit, 1000f)) return;
-        if (hit.collider.gameObject != _target.gameObject)
+        if (hit.collider == null || hit.collider.gameObject != _target.gameObject)
         {
             _target = null;
             return;
@@ -116,29 +128,41 @@ public class BotComponent : MonoBehaviour
 
         if (Random.value > chanceToShoot) return;
 
-        _target.Die();
+        BotComponent victim = _target;
         _target = null;
+        victim.Die();
     }
 
     private void Die()
     {
-        switch (role)
+        // Уведомляем оппонента/свою команду — но безопасно: к этому моменту
+        // MatchManager мог уже начать DestroyTeams, и любая ссылка может оказаться Unity-null.
+        TeamManager team = _teamManager;
+        TeamManager other = team != null ? team.OtherTeam : null;
+
+        if (team != null && other != null)
         {
-            //Notify defenders witch site is under attack
-            case BotRole.Defender:
-                _teamManager.NotifyDefenders(_teamManager.OtherTeam.targetSite);
-                break;
-            case BotRole.Attacker:
-                _teamManager.OtherTeam.NotifyDefenders(_teamManager.targetSite);
-                break;
-            default:
-                break;
+            switch (role)
+            {
+                case BotRole.Defender:
+                    team.NotifyDefenders(other.targetSite);
+                    break;
+                case BotRole.Attacker:
+                    other.NotifyDefenders(team.targetSite);
+                    break;
+            }
         }
 
-        GameManager.Instance.SaveDeathPosition(transform.position);
-        GameManager.Instance.IncreaseDeathCount();
-        if (_teamManager != null)
-            _teamManager.Bots.Remove(this);
+        var gm = GameManager.Instance;
+        if (gm != null)
+        {
+            gm.SaveDeathPosition(transform.position);
+            gm.IncreaseDeathCount();
+        }
+
+        if (team != null && team.Bots != null)
+            team.Bots.Remove(this);
+
         if (deathEffect != null)
         {
             var spawnDeathEffect = new Vector3(transform.position.x, 50f, transform.position.z);

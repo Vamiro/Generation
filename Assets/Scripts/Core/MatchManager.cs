@@ -45,6 +45,19 @@ public class MatchManager : MonoSingleton<MatchManager>
     [SerializeField, Min(0), Tooltip("Лимит матчей в одной серии. 0 = бесконечный цикл.")]
     private int maxMatches = 0;
 
+    [Header("Скорость симуляции")]
+    [SerializeField, Range(0.1f, 20f), Tooltip("Множитель скорости симуляции. Меняется в полёте (слайдер, хоткеи [ / ] / \\).")]
+    private float simulationSpeed = 1f;
+    [SerializeField, Tooltip("Автоматически масштабировать Time.fixedDeltaTime, чтобы физика оставалась плавной при ускорении. Иначе ускорение увеличит количество FixedUpdate в секунду.")]
+    private bool scaleFixedDeltaTime = true;
+    [SerializeField, Tooltip("Шаг изменения скорости хоткеями [ / ].")]
+    private float simulationSpeedStep = 0.5f;
+    [SerializeField, Tooltip("Включить хоткеи [ / ] / \\ для управления скоростью в Play Mode.")]
+    private bool enableSpeedHotkeys = true;
+
+    private float _appliedSimulationSpeed = -1f;
+    private float _baselineFixedDeltaTime;
+
     [Header("Состояние (read-only)")]
     [SerializeField, ReadOnlyInInspector, Tooltip("Сколько матчей уже сыграно в текущей серии.")]
     private int matchesPlayed;
@@ -61,6 +74,35 @@ public class MatchManager : MonoSingleton<MatchManager>
     public bool IsLoopEnabled => _loopEnabled;
     public bool IsMatchActive => _state == MatchState.Running;
 
+    protected override void Awake()
+    {
+        base.Awake();
+        // Запоминаем дефолтное значение из Project Settings → Time, чтобы корректно
+        // масштабировать его при ускорении и восстановить при выключении.
+        _baselineFixedDeltaTime = Time.fixedDeltaTime;
+    }
+
+    private void OnEnable()
+    {
+        ApplySimulationSpeed(simulationSpeed, force: true);
+    }
+
+    private void OnDisable()
+    {
+        // Возвращаем нормальный темп — иначе Edit Mode/другие сцены унаследуют ускорение.
+        Time.timeScale = 1f;
+        Time.fixedDeltaTime = _baselineFixedDeltaTime > 0f ? _baselineFixedDeltaTime : 0.02f;
+    }
+
+#if UNITY_EDITOR
+    private void OnValidate()
+    {
+        // Чтобы слайдер в инспекторе реагировал в Play Mode без задержки на Update.
+        if (Application.isPlaying)
+            ApplySimulationSpeed(simulationSpeed, force: true);
+    }
+#endif
+
     private void Update()
     {
         if (Input.GetKeyDown(KeyCode.W))
@@ -68,9 +110,59 @@ public class MatchManager : MonoSingleton<MatchManager>
         if (Input.GetKeyDown(KeyCode.S))
             StopLoop();
 
-        TickStateMachine();
+        HandleSpeedHotkeys();
+        ApplySimulationSpeed(simulationSpeed);
+
+        try
+        {
+            TickStateMachine();
+        }
+        catch (System.Exception ex)
+        {
+            // Не даём одиночному NRE подвесить цикл матчей. Чистим состояние и идём в Cooldown.
+            Debug.LogError($"MatchManager: исключение в TickStateMachine — {ex}");
+            DestroyTeams();
+            _state = MatchState.Cooldown;
+            _stateTimer = 0f;
+        }
+
         currentState = _state.ToString();
     }
+
+    private void HandleSpeedHotkeys()
+    {
+        if (!enableSpeedHotkeys)
+            return;
+
+        float step = Mathf.Max(0.01f, simulationSpeedStep);
+        if (Input.GetKeyDown(KeyCode.LeftBracket))
+            simulationSpeed = Mathf.Max(0.1f, simulationSpeed - step);
+        else if (Input.GetKeyDown(KeyCode.RightBracket))
+            simulationSpeed = Mathf.Min(20f, simulationSpeed + step);
+        else if (Input.GetKeyDown(KeyCode.Backslash))
+            simulationSpeed = 1f;
+    }
+
+    private void ApplySimulationSpeed(float speed, bool force = false)
+    {
+        speed = Mathf.Clamp(speed, 0.1f, 20f);
+        if (!force && Mathf.Approximately(speed, _appliedSimulationSpeed))
+            return;
+
+        Time.timeScale = speed;
+        if (scaleFixedDeltaTime && _baselineFixedDeltaTime > 0f)
+            Time.fixedDeltaTime = _baselineFixedDeltaTime * speed;
+
+        _appliedSimulationSpeed = speed;
+    }
+
+    public void SetSimulationSpeed(float speed)
+    {
+        simulationSpeed = Mathf.Clamp(speed, 0.1f, 20f);
+        ApplySimulationSpeed(simulationSpeed, force: true);
+    }
+
+    public float SimulationSpeed => simulationSpeed;
 
     public void StartLoop()
     {
@@ -202,6 +294,18 @@ public class MatchManager : MonoSingleton<MatchManager>
 
         _attackers = CreateTeam<AttackerTeamManager>("AttackerTeamManager", attackerZone);
         _defenders = CreateTeam<DefenderTeamManager>("DefenderTeamManager", defenderZone);
+
+        // Если хоть одна команда не получила ни одного бота (например, NavMesh.SamplePosition
+        // не нашёл точку) — отменяем матч, иначе TickStateMachine сразу зафиксирует чужую победу
+        // и серия начнёт бесконечно перезапускать пустые матчи.
+        if (_attackers.LiveBotsCount == 0 || _defenders.LiveBotsCount == 0)
+        {
+            Debug.LogError($"MatchManager: матч не стартовал — пустая команда (A={_attackers.LiveBotsCount}, D={_defenders.LiveBotsCount}). Цикл остановлен.");
+            DestroyTeams();
+            _loopEnabled = false;
+            _state = MatchState.Idle;
+            return;
+        }
 
         _attackers.SetOtherTeam(_defenders);
         _defenders.SetOtherTeam(_attackers);

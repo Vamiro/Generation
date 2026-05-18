@@ -406,6 +406,7 @@ MonoBehaviour:
   wallMaterial: {fileID: 2100000, guid: 0eece8546e0a519468a9dbec5bbf6dd8, type: 2}
   neutralMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
   roomMaterial: {fileID: 2100000, guid: 0b571b0b94de14ba8a1cb9708f4eb74e, type: 2}
+  pocketMaterial: {fileID: 0}
   enableRooms: 1
   roomsPerMainRoad: 1
   roomSize:
@@ -446,6 +447,8 @@ MonoBehaviour:
     max: 2
   roadCoverChance: 0.7
   roadCoverMinExposure: 3
+  buildNavMesh: 1
+  navMeshAgentTypeId: 0
 --- !u!4 &1158948890
 Transform:
   m_ObjectHideFlags: 0
@@ -461,6 +464,63 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1694810178
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1694810179}
+  - component: {fileID: 1694810180}
+  m_Layer: 0
+  m_Name: MatchManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1694810179
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1694810178}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 112.29265, y: 5.4963894, z: 101.74016}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1694810180
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1694810178}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0502f9671c98f4fbfbb1899921aaf49b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  botPrefab: {fileID: 1539800631842923702, guid: 0bc1c79663a1d0c4fb6a83084eb0d0db, type: 3}
+  botsPerTeam: 5
+  snapSpawnToNavMesh: 1
+  navMeshSampleRadius: 3
+  matchTimeout: 120
+  betweenMatchesDelay: 2
+  maxMatches: 0
+  simulationSpeed: 1
+  scaleFixedDeltaTime: 1
+  simulationSpeedStep: 0.5
+  enableSpeedHotkeys: 1
+  matchesPlayed: 0
+  currentState: Idle
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -468,3 +528,4 @@ SceneRoots:
   - {fileID: 689928814}
   - {fileID: 1084369818}
   - {fileID: 1158948890}
+  - {fileID: 1694810179}

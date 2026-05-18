@@ -17,20 +17,30 @@ public class AttackerTeamManager : TeamManager
     public override void Update()
     {
         base.Update();
+        // Перед любой LINQ/итерацией убираем destroyed-ссылки, иначе .All / .Count падают
+        // в момент, когда бот уже Destroy(gameObject), но ещё не успел сам выйти из Bots.
+        PruneDeadBots();
+        if (Bots == null || Bots.Count == 0) return;
+        if (OtherTeam == null) return;
         CheckForRotation();
         CheckOnPosition();
     }
 
     private void AssignRoles()
     {
-        // Первые 2 бота — атакующие
-        for (var i = 0; i < 2; i++) Bots[i].AssignRole(BotRole.Attacker);
+        AssignRoleSafe(0, BotRole.Attacker);
+        AssignRoleSafe(1, BotRole.Attacker);
+        AssignRoleSafe(2, BotRole.Flanker);
+        AssignRoleSafe(3, BotRole.Flanker);
+        AssignRoleSafe(4, BotRole.Scout);
+    }
 
-        // Следующие 2 бота — фланкеры
-        for (var i = 2; i < 4; i++) Bots[i].AssignRole(BotRole.Flanker);
-
-        // Последний бот — скаут
-        Bots[4].AssignRole(BotRole.Scout);
+    private void AssignRoleSafe(int index, BotRole role)
+    {
+        if (index < 0 || index >= Bots.Count) return;
+        BotComponent bot = Bots[index];
+        if (bot == null) return;
+        bot.AssignRole(role);
     }
 
     private void ChooseTargetSite()
@@ -49,6 +59,7 @@ public class AttackerTeamManager : TeamManager
             // Назначаем цели
             foreach (var bot in Bots)
             {
+                if (bot == null) continue;
                 if (bot.Role == BotRole.Attacker)
                     bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Main) ?? targetSite);
 
@@ -86,12 +97,14 @@ public class AttackerTeamManager : TeamManager
             
             foreach (var bot in Bots)
             {
+                if (bot == null) continue;
                 var neutralZones = MapManager.Instance.NeutralZones;
                 if (neutralZones.Count > 0)
                     bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
             }
-            
-            OtherTeam.NotifyDefendersAboutRotate(targetSite);
+
+            if (OtherTeam != null)
+                OtherTeam.NotifyDefendersAboutRotate(targetSite);
             
             // Назначаем цели
             _isMovingToSite = false;
@@ -100,20 +113,41 @@ public class AttackerTeamManager : TeamManager
 
     private void CheckForRotation()
     {
-        if (Bots.Count == 1 && Bots[0].Role != BotRole.Attacker) Bots[0].AssignRole(BotRole.Attacker, targetSite);
-        
-        if (OtherTeam.Bots.Count - Bots.Count < _rotationThreshold || _isRotated) return;
+        if (Bots.Count == 1 && Bots[0] != null && Bots[0].Role != BotRole.Attacker)
+            Bots[0].AssignRole(BotRole.Attacker, targetSite);
+
+        var enemyBots = OtherTeam != null ? OtherTeam.Bots : null;
+        int enemyAlive = 0;
+        if (enemyBots != null)
+        {
+            for (int i = 0; i < enemyBots.Count; i++)
+                if (enemyBots[i] != null) enemyAlive++;
+        }
+
+        if (enemyAlive - Bots.Count < _rotationThreshold || _isRotated) return;
         _isRotated = true;
-        foreach (var bot in Bots) bot.AssignRole(BotRole.Attacker);
+        foreach (var bot in Bots)
+        {
+            if (bot != null) bot.AssignRole(BotRole.Attacker);
+        }
         ChooseTargetSite();
     }
-    
+
     private void CheckOnPosition()
     {
-        if (_isMovingToSite || targetSite == null || !Bots.All(bot => bot.IsOnPosition)) return;
+        if (_isMovingToSite || targetSite == null) return;
+
+        for (int i = 0; i < Bots.Count; i++)
+        {
+            BotComponent bot = Bots[i];
+            if (bot == null) return; // ещё не зачищено — пропустим этот кадр
+            if (!bot.IsOnPosition) return;
+        }
+
         _isMovingToSite = true;
         foreach (var bot in Bots)
         {
+            if (bot == null) continue;
             if (bot.Role is BotRole.Attacker or BotRole.Flanker)
                 bot.MoveToZone(targetSite);
         }

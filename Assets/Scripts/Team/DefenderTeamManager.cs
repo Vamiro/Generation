@@ -17,11 +17,13 @@ public class DefenderTeamManager : TeamManager
     public override void Update()
     {
         base.Update();
-        
+        PruneDeadBots();
+        if (Bots == null || Bots.Count == 0) return;
+
         if (!_isMovingToSite) return;
-        if (MapManager.Instance.SiteZones.Count == 0)
+        if (MapManager.Instance == null || MapManager.Instance.SiteZones.Count == 0)
             return;
-        
+
         _currentTime += Time.deltaTime;
         if (!(_currentTime >= _delay)) return;
         _isMovingToSite = false;
@@ -41,18 +43,20 @@ public class DefenderTeamManager : TeamManager
             Debug.LogWarning("DefenderTeamManager: отсутствуют Site-зоны.");
             return;
         }
-            
-        // Первые два бота защищают первую точку
-        for (var i = 0; i < 2; i++) Bots[i].AssignRole(BotRole.Defender, MapManager.Instance.SiteZones[0]);
-        // Вторые два бота защищают вторую точку
-        var secondSite = MapManager.Instance.SiteZones.Count > 1
-            ? MapManager.Instance.SiteZones[1]
-            : MapManager.Instance.SiteZones[0];
-        for (var i = 2; i < 4; i++) Bots[i].AssignRole(BotRole.Defender, secondSite);
 
-        // Последний бот — скаут
-        Bots[4].AssignRole(BotRole.Scout);
-        // Шанс пойти в нейтральную зону, либо на любую дорогу
+        var siteA = MapManager.Instance.SiteZones[0];
+        var siteB = MapManager.Instance.SiteZones.Count > 1
+            ? MapManager.Instance.SiteZones[1]
+            : siteA;
+
+        AssignRoleSafe(0, BotRole.Defender, siteA);
+        AssignRoleSafe(1, BotRole.Defender, siteA);
+        AssignRoleSafe(2, BotRole.Defender, siteB);
+        AssignRoleSafe(3, BotRole.Defender, siteB);
+        AssignRoleSafe(4, BotRole.Scout, null);
+
+        if (Bots.Count <= 4 || Bots[4] == null) return;
+
         var chanceToGoToNeutral = Random.Range(0, 2);
         if (chanceToGoToNeutral == 0)
         {
@@ -68,19 +72,27 @@ public class DefenderTeamManager : TeamManager
         }
     }
 
+    private void AssignRoleSafe(int index, BotRole role, MapZoneComponent zone)
+    {
+        if (index < 0 || index >= Bots.Count) return;
+        BotComponent bot = Bots[index];
+        if (bot == null) return;
+        bot.AssignRole(role, zone);
+    }
+
     private void TryRepositionDefenders(int start, int end, MapZoneComponent siteZone)
     {
-        for (var i = start; i < end; i++)
+        int clampedEnd = Mathf.Min(end, Bots.Count);
+        for (var i = start; i < clampedEnd; i++)
         {
+            BotComponent bot = Bots[i];
+            if (bot == null) continue;
+
             var chance = Random.Range(0, 4);
             if (chance is 0 or 1)
-            {
-                Bots[i].MoveToZone(FindPreferredRoad(siteZone, RoadType.Main));
-            }
+                bot.MoveToZone(FindPreferredRoad(siteZone, RoadType.Main));
             else if (chance == 2)
-            {
-                Bots[i].MoveToZone(FindPreferredRoad(siteZone, RoadType.Link));
-            }
+                bot.MoveToZone(FindPreferredRoad(siteZone, RoadType.Link));
         }
     }
 

@@ -1,8 +1,5 @@
 ﻿using System.Collections.Generic;
-using System.Linq;
-using UnityEditor;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 public abstract class TeamManager : MonoBehaviour
 {
@@ -57,17 +54,36 @@ public abstract class TeamManager : MonoBehaviour
     
     public void NotifyDefenders(MapZoneComponent site)
     {
-        foreach (var defender in Bots)
+        if (bots == null) return;
+        for (int i = 0; i < bots.Count; i++)
         {
+            BotComponent defender = bots[i];
+            if (defender == null) continue;
             defender.AssignRole(BotRole.Defender, site);
         }
     }
 
     public void NotifyDefendersAboutRotate(MapZoneComponent site)
     {
-        for (var i = 0; i < Bots.Count / 2 + 1; i++)
+        if (bots == null) return;
+        int upTo = Mathf.Min(bots.Count, bots.Count / 2 + 1);
+        for (var i = 0; i < upTo; i++)
         {
-            Bots[i].AssignRole(BotRole.Defender, site);
+            BotComponent bot = bots[i];
+            if (bot == null) continue;
+            bot.AssignRole(BotRole.Defender, site);
+        }
+    }
+
+    // Чистит из списка все уничтоженные ссылки. Зовём перед массовыми итерациями
+    // в Update командных менеджеров, чтобы LINQ/индексы не падали на Unity-null.
+    public void PruneDeadBots()
+    {
+        if (bots == null) return;
+        for (int i = bots.Count - 1; i >= 0; i--)
+        {
+            if (bots[i] == null)
+                bots.RemoveAt(i);
         }
     }
 }

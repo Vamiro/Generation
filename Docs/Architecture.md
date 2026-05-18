@@ -423,6 +423,13 @@ Idle ── W ──▶ Running ── (one team empty | timeout) ──▶ Cool
 - `betweenMatchesDelay` — пауза между матчами в `Cooldown`.
 - `maxMatches` — лимит серии (0 = бесконечно). По достижении — цикл выключается сам.
 
+**Скорость симуляции (live-управление):**
+- `simulationSpeed` (Range 0.1–20, default 1.0) — множитель `Time.timeScale`. Применяется каждый кадр в `Update`, поэтому ползунок в инспекторе работает в Play Mode мгновенно. `OnValidate` также применяет значение сразу. Программный доступ — `MatchManager.Instance.SetSimulationSpeed(x)` / `SimulationSpeed`.
+- `scaleFixedDeltaTime` (default true) — автоматически масштабирует `Time.fixedDeltaTime` пропорционально скорости. Это сохраняет частоту FixedUpdate в реальном времени (физика/боты остаются плавными при 5×–10×). При false — FixedUpdate вызывается чаще, увеличивая CPU-нагрузку, но боты «думают» чаще per-game-second.
+- `simulationSpeedStep` + `enableSpeedHotkeys` — хоткеи в Play Mode: `[` уменьшает скорость на шаг, `]` увеличивает, `\` сбрасывает к 1.0.
+- При `OnDisable` `MatchManager` восстанавливает `Time.timeScale = 1` и `Time.fixedDeltaTime` к запомненному при `Awake` значению — чтобы Edit Mode / следующая сцена не унаследовали ускорение.
+- `GameManager.timeScale` устаревший — установка значения в `Start()` GameManager-а перетирается ApplySimulationSpeed-ом MatchManager-а на следующем кадре. `MatchManager` владеет таймскейлом.
+
 **Read-only в инспекторе:** `matchesPlayed`, `currentState` — для дебага серии.
 
 **Спавн команд:**
