@@ -27,9 +27,10 @@ public class GameManager : MonoSingleton<GameManager>
         SaveDeathPositions();
     }
 
-    private void OnDestroy()
+    protected override void OnDestroy()
     {
         SaveDeathPositions();
+        base.OnDestroy();
     }
 
     // Совместимость со старыми вызовами BotComponent.Die — счётчик больше нигде не читается,
