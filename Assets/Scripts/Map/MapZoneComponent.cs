@@ -28,6 +28,16 @@ public class MapZoneComponent : MonoBehaviour
 
     private List<Vector3> samplePoints = new();
 
+    // На референс-карте зоны расставлены вручную в сцене — там нет MapGenerator,
+    // который зарегистрировал бы их в MapManager. Делаем это сами на старте.
+    // Идемпотентно: RegisterZone проверяет дубликаты.
+    private void Awake()
+    {
+        MapManager mapManager = MapManager.Instance;
+        if (mapManager != null)
+            mapManager.RegisterZone(this);
+    }
+
     public void InitializeZone(int zoneId, IEnumerable<BoxCollider> colliders)
     {
         id = zoneId;
@@ -96,6 +106,16 @@ public class MapZoneComponent : MonoBehaviour
     {
         if (slot == null) return;
         tacticalSlots.Add(slot);
+    }
+
+    /// <summary>
+    /// Удаляет конкретный слот из зоны. Нужно для <c>TacticalSlotMarker.OnDisable</c> —
+    /// чтобы при отключении/удалении маркера в Edit Mode слот не "висел" в списке зоны.
+    /// </summary>
+    public bool RemoveTacticalSlot(TacticalSlot slot)
+    {
+        if (slot == null) return false;
+        return tacticalSlots.Remove(slot);
     }
 
     public void ClearTacticalSlots()

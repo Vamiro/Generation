@@ -82,7 +82,8 @@ Assets/Scripts/
 │   ├── MapGenerator.NavMesh.cs        ★ partial: RebuildNavMesh() — runtime-бейк на Geometry  ← NEW
 │   ├── MapGenerator.Covers.cs         ★ partial: расстановка укрытий
 │   ├── MapGenerator.TacticalSlots.cs  ★ partial: Hold/Peek-точки рядом с cover-блоками  ← NEW (Этап C)
-│   ├── TacticalSlot.cs                — POCO: позиция + facingDir + тип + occupant (бронь)  ← NEW (Этап C)
+│   ├── TacticalSlot.cs                — POCO: позиция + facingDir + kind + CoverHeight + influenceRadius + occupant
+│   ├── TacticalSlotMarker.cs          — MonoBehaviour: ручная разметка слотов в сцене (для референс-карты)  ← NEW
 │   └── Zones/
 │       ├── SpawnZoneComponent.cs      — пустой маркер
 │       ├── SiteZoneComponent.cs       — пустой маркер
@@ -378,6 +379,7 @@ A* с учётом штрафов и предпочтений.
 - **Прицеливание:** `aimTurnSpeed` (град/сек), `aimAngleTolerance` (град) — стрельба разрешена только если ствол смотрит на цель в пределах допуска.
 - **Выбор цели:** `sightRange`, `distancePriorityWeight`, `threatPriorityBonus`.
 - **Reposition tick:** `repositionDelay`, `repositionJitter` — таймер, после которого бот в режиме idle меняет точку в текущей зоне.
+- **Скорости по ролям:** `attackerSpeed / defenderSpeed / flankerSpeed / scoutSpeed` — индивидуальные `NavMeshAgent.speed` для каждой роли. Раньше Scout = 3.5, остальные = 5 захардкожено. Теперь крутится в инспекторе для калибровки: Scout медленнее = тише, дольше живёт; Flanker быстрее = успевает зайти с фланга.
 - `deathEffect` — префаб эффекта смерти.
 
 Поведение (`Update` + `FixedUpdate`):
@@ -412,22 +414,44 @@ p_hit = baseAccuracy
 - `ComputeHitChance` **не** вызывает `Random` (детерминированно). Сам бросок «попал/нет» делает `BotComponent.Shoot` через `UnityEngine.Random.value` — попадает под `Random.InitState(currentGenerationSeed)` от `MapGenerator`.
 
 **Признак «цель в укрытии»** (`HitModel.IsTargetUsingCover`):
-- World → cell через `MapGenerator.BlockSize`.
-- Проверяем 4 соседние клетки цели; если хотя бы одна — `Wall` (`MapGenerator.IsCellWall`) или `Cover` (`MapGenerator.IsCellOccupiedByCover`), цель считается «приникнувшей».
-- **Сторона со стороны стрелка исключается** — иначе укрытие за спиной у цели «защищает от выстрела в лицо». Это и формализует валорантовское «hugging the wall».
-- Никаких новых тегов/слоёв на префабах не требуется — модель работает по сеточным данным `MapGenerator`.
 
-**Доступ к карте из бота:**
-- `MapGenerator` — не singleton; `BotComponent.ResolveMapGenerator` лениво кэширует ссылку через `FindFirstObjectByType` (один раз за сессию). Перегенерация карты (R) пересоздаёт содержимое того же компонента, ссылку не инвалидирует.
-- На `MapGenerator` добавлены публичные `BlockSize`, `IsCellWall(int x, int z)` рядом с уже существовавшим `IsCellOccupiedByCover`.
+Реализация повторяет архитектуру CCSBot в CS:GO (см. `cstrike15_src`) и YaPB в CS 1.6 (open-source, MIT; Camp-нода с двумя маркерами направления). В этих системах знание о укрытиях компилируется на этапе подготовки карты в дискретный набор точек, и весь runtime-loop бота работает только с ними — никаких рейкастов «есть ли тут стена» в боевом цикле.
+
+В нашем коде эта база точек — `TacticalSlot` в `MapZoneComponent.TacticalSlots`. Алгоритм:
+1. Перебираем все `MapZoneComponent` через `MapManager.Instance.Zones`.
+2. Для каждого `TacticalSlot` с `(slot.worldPos - targetPos).sqrMagnitude ≤ slot.influenceRadius²`:
+3. Сравниваем направление `(shooter - target).normalized` с `-slot.facingDir` (cover лежит со стороны, противоположной facingDir).
+4. Если `dot ≥ cfg.coverAngleCosTolerance` (по умолчанию 0.5 ≈ ±60°) — цель прикрыта.
+
+Сторона со стороны стрелка не учитывается через специальный фильтр — она автоматически отбрасывается тем, что `facingDir` слота направлен «наружу через cover», а не «в стрелка». Это формализует валорантовское «hugging the wall» без зависимости от сетки.
+
+**Инвариант между картами.** `HitModel.IsTargetUsingCover` зависит только от содержимого `MapZoneComponent.TacticalSlots`, не от `MapGenerator`/`cellTypes`/`coverOccupancy`. Источник наполнения списка прозрачен:
+- Процедурная карта — `MapGenerator.BuildTacticalSlots` (см. §5.2).
+- Референс-карта — `TacticalSlotMarker`-ы в сцене (см. §5.3).
+
+Бот ведёт себя одинаково в обеих средах.
+
+**Параметры `HitModelConfig` для cover-стека:**
+- `targetCoverPenalty` (0..1, default 0.5) — штраф к `p_hit`.
+- `coverAngleCosTolerance` (-1..1, default 0.5) — допуск по направлению cover-а. Чем выше — тем точнее стрелок должен быть «по линии» с cover-ом, чтобы тот считался прикрывающим.
 
 ### 5.2. TacticalSlots (этап C плана переработки ботов)
 
 Файлы:
-- `Assets/Scripts/Map/TacticalSlot.cs` — POCO: `worldPos`, `facingDir`, `kind`, `coverScore`, `occupant`.
-- `Assets/Scripts/Map/MapGenerator.TacticalSlots.cs` — `BuildTacticalSlots()`, вызывается в пайплайне на шаге `[9.6]`.
+- `Assets/Scripts/Map/TacticalSlot.cs` — POCO: `worldPos`, `facingDir`, `kind`, `coverHeight`, `influenceRadius`, `coverScore`, `occupant`.
+- `Assets/Scripts/Map/MapGenerator.TacticalSlots.cs` — `BuildTacticalSlots()` (автогенерация по сетке), вызывается в пайплайне на шаге `[9.6]`.
+- `Assets/Scripts/Map/TacticalSlotMarker.cs` — компонент для ручной разметки в сцене (см. §5.3).
 
-**Идея.** Раньше «куда бежать защитнику на сайте» = `zone.GetRandomPointInZone()` (случайная Floor-клетка). Получалось «все стоят кучкой в случайной точке». Теперь у каждой зоны есть набор именованных тактических позиций, привязанных к ковер-блокам сайта/дороги. Бот резервирует слот через `MapZoneComponent.TryAcquireSlot(kind, this)` — это даёт распределение по углам и направление взгляда после прихода (`facingDir`).
+**Идея.** Раньше «куда бежать защитнику на сайте» = `zone.GetRandomPointInZone()` (случайная Floor-клетка). Получалось «все стоят кучкой в случайной точке». Теперь у каждой зоны есть набор именованных тактических позиций. Бот резервирует слот через `MapZoneComponent.TryAcquireSlot(kind, this)` — это даёт распределение по углам и направление взгляда после прихода (`facingDir`).
+
+**Архитектурная параллель.** `TacticalSlot` ≡ `HidingSpot`/`EncounterSpot` в CS:GO и Camp-node в YaPB. У всех трёх систем: позиция + направление взгляда + флаги + occupant. Это позволяет:
+- В runtime боты работают **только** с этим списком.
+- Источник наполнения (auto vs manual) **прозрачен** для бота.
+- Боевая модель (`HitModel`) использует ту же базу для определения «цель в укрытии» — см. §5.1.
+
+**Два источника наполнения списка** (оба пишут в `MapZoneComponent.tacticalSlots`):
+1. **Автогенерация** — `MapGenerator.BuildTacticalSlots()`. Для процедурной карты. Аналог `nav_analyze` в Source Engine.
+2. **Ручная разметка** — `TacticalSlotMarker` в сцене. Для референс-карты или для дополнения процедурной. Аналог `nav_make_sniper_spots` / YaPB Camp-node editor.
 
 **Правила построения слота (см. также комментарий в `MapGenerator.TacticalSlots.cs`):**
 1. Клетка-кандидат — Floor-клетка одного из типов: `Site`, `Neutral`, `Room`, `Main`, `Link`. `Spawn`/`Pocket` исключены.
@@ -455,15 +479,44 @@ p_hit = baseAccuracy
 - `AttackerTeamManager.CheckOnPosition` — после синхронного захода атакеров на сайт каждый пытается занять `HoldDefender`-слот сайта (это и есть постплант-позиции у углов), иначе фоллбэк.
 
 **Что делать, если коверов мало или нет:**
-- Если `enableCovers = false` — слоты не строятся, поведение откатывается на этап A (рандом точек в зоне).
-- Если в конкретной зоне 0 cover-блоков (бывает на маленьких комнатах) — слотов в ней нет, бот опять идёт через `MoveToZone`. Это безопасный фоллбэк, никаких NRE.
+- Если `enableCovers = false` — автогенерированных слотов нет; можно дополнить вручную через `TacticalSlotMarker`-ы. Если и их нет — поведение откатывается на этап A (рандом точек в зоне).
+- Если в конкретной зоне 0 cover-блоков (бывает на маленьких комнатах) — автогенератор слотов не положит, ручные маркеры — могут. Бот идёт через `MoveToZone` как фоллбэк. Это безопасный путь, никаких NRE.
 
-**Доступ из бота к `MapGenerator`:** `BotComponent.ResolveMapGenerator()` уже лениво кэшировал ссылку для HitModel; для слотов сам `MapGenerator` не нужен — слоты живут в `MapZoneComponent`, бот общается только с зоной.
+**Доступ из бота к `MapGenerator`:** не требуется. Слоты живут в `MapZoneComponent`, `HitModel.IsTargetUsingCover` берёт их через `MapManager.Instance.Zones`. С Этапа 1 переработки cover-стека `BotComponent` больше **не** зависит от `MapGenerator` для боевой модели — это и есть инвариант «бот ведёт себя одинаково на процедурной и референс-карте».
+
+**Поля `TacticalSlot` (POCO):**
+- `worldPos`, `facingDir`, `kind` — обязательные (см. выше).
+- `coverHeight` (`Full|Half`) — пока косметическое, для будущей разницы штрафа Half ≈ блокирует только присевшего. Аналог crouch-aware spots в CS NavMesh и YaPB-флага «Crouch».
+- `influenceRadius` (default 1.5 м) — радиус, в котором слот «прикрывает» цель в боевой модели (§5.1).
+- `coverScore` (1..4) — сколько сторон 4-окрестности закрыты wall/cover. Только для автогенерированных слотов. Зарезервировано для этапа F (предпочтение крайних углов).
 
 **Текущие ограничения (этапы D–F дорожной карты):**
 - Нет событийной шины (защитник не реагирует на «пуш атакеров», пока кто-то не умрёт) — этап D.
 - Параметры пока в полях `BotComponent` / `HitModelConfig`, а не в `BotProfile` SO — этап E.
 - Слоты строятся «по одному на каждый cover-блок»; продвинутые паттерны (Crossfire — пара слотов, mutually-visible; Default setup — 1 close + 1 deep на сайте) — этап F.
+
+### 5.3. TacticalSlotMarker — ручная разметка слотов в сцене
+
+Файл: `Assets/Scripts/Map/TacticalSlotMarker.cs`. Компонент-маркер на пустом GameObject в сцене.
+
+**Зачем.** Для референс-карты, скопированной из реальной игры (CS, Valorant и т.п.), нет процедурного генератора и нет сетки `cellTypes[,]`. Но боты должны вести себя так же, как на процедурной карте — потому что мы их калибруем по результатам матчей на референс-карте, и эти параметры должны переносится на процедурные. `TacticalSlotMarker` даёт ту же базу `TacticalSlot`-точек, что и автогенератор, но руками.
+
+Это прямой аналог CCSBot/`nav_make_sniper_spots` и YaPB Camp-node editor — индустриальный канон для коридорных FPS.
+
+**Поведение:**
+- `transform.position` → `slot.worldPos`.
+- `transform.forward` → `slot.facingDir` (бот стоит ЗА укрытием, смотрит в эту сторону).
+- Поля в инспекторе: `kind` (HoldDefender/PeekAttacker), `coverHeight` (Full/Half), `influenceRadius`, `zone` (опционально).
+- `OnEnable()`: ищет зону (либо из поля `zone`, либо через `Physics.OverlapSphere` в позиции маркера), создаёт `TacticalSlot`, добавляет в зону через `MapZoneComponent.AddTacticalSlot`.
+- `OnDisable()`: освобождает бронь (`ReleaseSlotOf`) и удаляет слот из зоны (`RemoveTacticalSlot`).
+- `OnDrawGizmos`: рисует сферу + стрелка facingDir + wire-сфера influenceRadius в Scene-view для удобства расстановки.
+
+**Зона определяется так:**
+1. Если `zone` назначен в инспекторе — используется он.
+2. Иначе — `Physics.OverlapSphere(transform.position, 0.05f, ...)` с `QueryTriggerInteraction.Collide`, ищется первый коллайдер, у которого в иерархии есть `MapZoneComponent`.
+3. Если ничего не нашлось — `Debug.LogWarning`, слот не добавляется.
+
+**Регистрация зон референс-карты.** `MapZoneComponent.Awake` сам регистрирует себя в `MapManager` (если не зарегистрирован), чтобы рукотворные зоны сцены без `MapGenerator` попали в `MapManager.Zones / SiteZones / RoadZones` и `AttackerTeamManager`/`DefenderTeamManager` их увидели. На процедурной карте дубликации нет: `RegisterZone` проверяет `Contains`.
 
 ---
 
@@ -474,14 +527,17 @@ p_hit = baseAccuracy
 - `NotifyDefenders` / `NotifyDefendersAboutRotate` — переподчинение ботов под смену атакуемого сайта.
 
 ### `AttackerTeamManager`
-- Распределение ролей: 2 Attacker, 2 Flanker, 1 Scout.
-- Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной. Все эти движения теперь идут через `MoveBotToZoneOrPeek` — сначала пробуется `PeekAttacker`-слот в зоне, фоллбэк — `MoveToZone` (этап C, см. 5.2).
-- Ротация цели: при существенной разнице в численности (`_rotationThreshold = 2`) — все становятся Attacker и идут на новый сайт (через нейтраль с тем же peek-фоллбэком).
-- Когда все боты пришли на исходные позиции — синхронный заход на сайт. На самом сайте атакеры пытаются занять `HoldDefender`-слот (углы у cover) — это и есть postplant-позиции.
+- Распределение ролей вынесено в инспектор (`attackerCount / flankerCount / scoutCount`, default 2/2/1). Хвост сверх суммы (если `botsPerTeam` больше) получает Attacker.
+- Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной (`scoutNeutralProbability` в инспекторе, default 0.5). Все эти движения идут через `MoveBotToZoneOrPeek` — сначала пробуется `PeekAttacker`-слот в зоне, фоллбэк — `MoveToZone` (этап C, см. 5.2).
+- **Выбор атакуемого сайта — weighted random по `site.GetWeight(BotRole.Attacker)`** (`attackWeight` в `MapZoneComponent`). Если все веса 0 — uniform random (старое поведение). На референс-карте можно выставить `siteA.attackWeight = 1.0, siteB.attackWeight = 1.5` → атакеры в 1.5 раза чаще выбирают B.
+- Ротация цели: при разнице в численности `rotationThreshold` (инспектор, default 2) — все становятся Attacker и идут на новый сайт.
+- Когда все боты пришли на исходные позиции — синхронный заход на сайт. На самом сайте атакеры пытаются занять `HoldDefender`-слот (углы у cover) — postplant-позиции.
 
 ### `DefenderTeamManager`
-- Распределение: по 2 защитника на каждый сайт + 1 Scout. `AssignRoleSafe` для роли `Defender` пробует `TryMoveToTacticalSlot(site, HoldDefender)` — защитник идёт в hold-spot сайта, разворачивается на вход; фоллбэк — `MoveToZone(site)`.
-- Каждые `_delay = 10` сек случайно репозиционирует часть защитников ближе к Main или Link — теперь через тактические слоты: сначала пробуется `HoldDefender`, потом `PeekAttacker`, потом фоллбэк на случайную точку дороги.
+- Распределение защитников по сайтам — **weighted по `site.GetWeight(BotRole.Defender)`** (`defenseWeight`). Если все веса 0 — равное по `defendersPerSite` на каждый сайт (старое поведение). Если веса заданы — пропорциональное распределение через largest-remainder method. На референс-карте: `siteA.defenseWeight = 1.5, siteB.defenseWeight = 1.0` → 60% защитников на A.
+- `scoutCount` (инспектор, default 1) — сколько ботов идут в Scout (нейтраль/дороги). Остаток после защитников.
+- `AssignRoleSafe` для роли `Defender` пробует `TryMoveToTacticalSlot(site, HoldDefender)` — защитник идёт в hold-spot сайта, разворачивается на вход; фоллбэк — `MoveToZone(site)`.
+- Каждые `repositionDelay` сек (инспектор, default 10) случайно репозиционирует часть защитников. **Старая chance-таблица (`0|1`, `2`, `3` из 4) заменена на 3 инспектор-веса** (`repositionMainWeight / repositionLinkWeight / repositionStayWeight`, default 2/1/1 — даёт ту же пропорцию). Через тактические слоты: сначала пробуется `HoldDefender`, потом `PeekAttacker`, потом фоллбэк на случайную точку дороги.
 
 ---
 
@@ -629,7 +685,22 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 
 `GetWeight(role)` → возвращает соответствующий вес.
 
-**Текущее состояние:** веса задаются вручную через инспектор после генерации (значения по умолчанию = 0). Боты пока их не используют для принятия решений. Это **точка интеграции на Этапе 4 roadmap** (параметризация + унификация весов).
+**Где используются (Этап 1 калибровочного блока):**
+
+| Точка | Файл | Поведение |
+|---|---|---|
+| Выбор атакуемого сайта | `AttackerTeamManager.PickWeightedSite` | Weighted random по `siteA.GetWeight(Attacker)` vs `siteB`. Если все веса 0 → uniform random. |
+| Распределение защитников по сайтам | `DefenderTeamManager.ComputeDefendersDistribution` | Пропорциональное распределение через largest-remainder method. Если все веса 0 → равно по `defendersPerSite` на сайт. |
+
+**Что НЕ использует пока (по-прежнему точки интеграции):**
+- `flankWeight` / `scoutWeight` — не учитываются при выборе зоны для Flanker/Scout.
+- Веса дорог (`RoadZoneComponent`) — для выбора Main vs Link маршрута игнорируются (сейчас всегда Main для атакера, Link для фланкера).
+
+**Способ калибровки на референс-карте:**
+1. Расставить сайты и дороги через `MapZoneComponent` (или дать `MapGenerator` сгенерировать).
+2. В инспекторе каждой Site-зоны выставить `attackWeight` и `defenseWeight` исходя из реальной карты (например, для Dust2-like B-сайт чуть слабее держится → `siteB.defenseWeight = 0.9, siteA.defenseWeight = 1.1`).
+3. Запустить серию матчей через `MatchManager.maxMatches` в headless-режиме, посмотреть `StatsData.json` и `siteAttackStats`.
+4. Подкрутить веса и повторить.
 
 ---
 
@@ -637,13 +708,13 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 
 | Ограничение | Где | Почему |
 |---|---|---|
-| Веса зон не интегрированы | `AttackerTeamManager` / `DefenderTeamManager` | TODO Этап 4–6 ВКР |
+| Веса зон частично интегрированы | `AttackerTeamManager` / `DefenderTeamManager` | `attackWeight` — для выбора сайта атакерами; `defenseWeight` — для распределения защитников. `flankWeight` / `scoutWeight` и веса дорог — пока не используются. См. §8. |
 | Расстановка укрытий нестабильна | `MapGenerator.Covers.cs` | в активной переработке |
 | Комнаты есть только тип «галерея», нет перекрёстков и ниш | `MapGenerator.Rooms.cs` | Следующая итерация Этапа 1 |
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
 | Нет batch-симуляций | `MatchManager` гоняет серию матчей (`maxMatches`) + headless-режим, `MatchStatsCollector` пишет per-match метрики в Storage. Не хватает только runner-а по списку карт (param sweep). | Этап 5 roadmap |
 | Метрики только смерти + per-match агрегаты | `DeathData` (координаты) + `StatsData` (исход, длительность, kill-zones) | следующий шаг — kill-heatmap из StatsData |
-| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этапы A (HP, поворот, scoring, reposition), B (HitModel: точность от дистанции/укрытия/движения) и C (TacticalSlots: Hold/Peek позиции у cover-блоков, бронирование) — **выполнены**, см. разделы 5 / 5.1 / 5.2. |
+| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этапы A (HP, поворот, scoring, reposition), B (HitModel: точность от дистанции/укрытия/движения) и C (TacticalSlots: Hold/Peek позиции у cover-блоков, бронирование) — **выполнены**, см. разделы 5 / 5.1 / 5.2. Этап C+ (инвариант поведения между процедурной и референс-картой через единую базу `TacticalSlot`, отвязка `HitModel` от сетки `MapGenerator`, ручная разметка через `TacticalSlotMarker`) — **выполнен**, см. §5.1 и §5.3. |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
 
 ---

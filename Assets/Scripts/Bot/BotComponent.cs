@@ -67,6 +67,16 @@ public class BotComponent : MonoBehaviour
     [SerializeField, Range(0f, 1f), Tooltip("Случайный разброс repositionDelay (±%). Чтобы боты не дёргались синхронно.")]
     private float repositionJitter = 0.4f;
 
+    [Header("Скорости передвижения по ролям")]
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Attacker (м/с). Применяется в AssignRole. Раньше было захардкожено 5.")]
+    private float attackerSpeed = 5f;
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Defender (м/с).")]
+    private float defenderSpeed = 5f;
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Flanker (м/с). На уровне атакера по умолчанию.")]
+    private float flankerSpeed = 5f;
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Scout (м/с). Меньше — тише крадётся, дольше выживает на разведке.")]
+    private float scoutSpeed = 3.5f;
+
     private TeamManager _teamManager;
     private BotComponent _target;
     private float _currentReactionTime;
@@ -77,10 +87,6 @@ public class BotComponent : MonoBehaviour
     private int _currentHealth;
     private float _idleTimer;
     private float _nextRepositionAt;
-    // Кэшируем MapGenerator один раз: он не пересоздаётся в рантайме (R-регенерация
-    // оставляет тот же компонент, меняется только содержимое). FindObjectOfType в Update
-    // был бы дорогим.
-    private static MapGenerator _cachedMap;
 
     public BotRole Role
     {
@@ -261,13 +267,25 @@ public class BotComponent : MonoBehaviour
     public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
     {
         Role = newRole;
-        SetAgentSpeed(Role == BotRole.Scout ? 3.5f : 5f);
+        SetAgentSpeed(GetSpeedForRole(Role));
 
         if (initialZone != null)
         {
             MoveToZone(initialZone);
         }
     }
+
+    // Скорости вынесены в инспектор для калибровки: разная скорость по ролям
+    // меняет тайминги (Scout медленнее = дольше живёт на разведке, Flanker быстрее =
+    // успевает зайти с фланга до того, как защита успеет ротировать).
+    private float GetSpeedForRole(BotRole r) => r switch
+    {
+        BotRole.Attacker => attackerSpeed,
+        BotRole.Defender => defenderSpeed,
+        BotRole.Flanker  => flankerSpeed,
+        BotRole.Scout    => scoutSpeed,
+        _ => attackerSpeed,
+    };
 
     private void Shoot()
     {
@@ -291,8 +309,13 @@ public class BotComponent : MonoBehaviour
     }
 
     // Собирает ShotContext (дистанция в неявном виде через позиции, скорость цели через её
-    // NavMeshAgent, признак "цель в укрытии" — через MapGenerator) и зовёт HitModel.
+    // NavMeshAgent, признак "цель в укрытии" — через MapManager.TacticalSlots) и зовёт HitModel.
     // Вынесено отдельно, чтобы можно было дёшево залогировать/протестировать.
+    //
+    // Этап 1 переработки cover-стека: больше не зависим от MapGenerator/сетки. Источником
+    // знания "цель в укрытии" служат TacticalSlot-точки в зонах — они одни и те же
+    // для процедурной карты (из MapGenerator.BuildTacticalSlots) и для референс-карты
+    // (из ручных TacticalSlotMarker-ов). Бот ведёт себя одинаково в обеих средах.
     private float ComputeHitChanceAgainst(BotComponent target)
     {
         if (target == null) return 0f;
@@ -301,8 +324,7 @@ public class BotComponent : MonoBehaviour
         if (target.agent != null && target.agent.isOnNavMesh)
             targetSpeed = target.agent.velocity.magnitude;
 
-        var map = ResolveMapGenerator();
-        bool inCover = HitModel.IsTargetUsingCover(transform.position, target.transform.position, map);
+        bool inCover = HitModel.IsTargetUsingCover(transform.position, target.transform.position, hitModel);
 
         var ctx = new HitModel.ShotContext
         {
@@ -313,15 +335,6 @@ public class BotComponent : MonoBehaviour
             TargetInCover = inCover,
         };
         return HitModel.ComputeHitChance(ctx, hitModel);
-    }
-
-    private static MapGenerator ResolveMapGenerator()
-    {
-        if (_cachedMap != null) return _cachedMap;
-        // FindObjectOfType зовётся один раз за сессию. Если карта перегенерируется,
-        // компонент тот же (R-регенерация делает Destroy children, не сам MapGenerator).
-        _cachedMap = UnityEngine.Object.FindFirstObjectByType<MapGenerator>();
-        return _cachedMap;
     }
 
     // Внешний API: чтобы Этап B (HitModel) мог наносить рассчитанный урон, минуя дефолтный путь.

@@ -1,9 +1,23 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class AttackerTeamManager : TeamManager
 {
-    private int _rotationThreshold = 2; // Разница сил для ротации
+    [Header("Состав команды (сумма должна равняться botsPerTeam у MatchManager)")]
+    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Attacker (идут по Main к сайту). Раньше было захардкожено 2.")]
+    private int attackerCount = 2;
+    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Flanker (идут по Link для обхода).")]
+    private int flankerCount = 2;
+    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Scout (разведка: нейтраль или случайная дорога).")]
+    private int scoutCount = 1;
+
+    [Header("Тактика")]
+    [SerializeField, Min(0), Tooltip("Разница в численности (защитников минус атакующих), при которой команда меняет атакуемый сайт. Меньше = чаще ротируют.")]
+    private int rotationThreshold = 2;
+    [SerializeField, Range(0f, 1f), Tooltip("Вероятность, что Scout пойдёт в нейтральную зону (vs случайная дорога). 0.5 = поровну (старое поведение).")]
+    private float scoutNeutralProbability = 0.5f;
+
     private bool _isRotated = false;
     private bool _isMovingToSite = false;
 
@@ -28,11 +42,22 @@ public class AttackerTeamManager : TeamManager
 
     private void AssignRoles()
     {
-        AssignRoleSafe(0, BotRole.Attacker);
-        AssignRoleSafe(1, BotRole.Attacker);
-        AssignRoleSafe(2, BotRole.Flanker);
-        AssignRoleSafe(3, BotRole.Flanker);
-        AssignRoleSafe(4, BotRole.Scout);
+        // Раскладываем роли по списку Bots в порядке: Attacker, Flanker, Scout.
+        // Хвост, если он остался (Bots.Count > сумма заданных), получает роль Attacker
+        // как самую "нейтральную" — лучше, чем оставить без роли.
+        int index = 0;
+        for (int i = 0; i < attackerCount; i++, index++)
+            AssignRoleSafe(index, BotRole.Attacker);
+        for (int i = 0; i < flankerCount; i++, index++)
+            AssignRoleSafe(index, BotRole.Flanker);
+        for (int i = 0; i < scoutCount; i++, index++)
+            AssignRoleSafe(index, BotRole.Scout);
+
+        while (index < Bots.Count)
+        {
+            AssignRoleSafe(index, BotRole.Attacker);
+            index++;
+        }
     }
 
     private void AssignRoleSafe(int index, BotRole role)
@@ -53,9 +78,9 @@ public class AttackerTeamManager : TeamManager
 
         if (!targetSite)
         {
-            // Выбираем случайную SiteVolume
-            targetSite = MapManager.Instance.SiteZones[Random.Range(0, MapManager.Instance.SiteZones.Count)];
-            
+            // Выбираем SiteVolume по весу attackWeight (если все веса 0 — uniform random).
+            targetSite = PickWeightedSite(MapManager.Instance.SiteZones, BotRole.Attacker);
+
             // Назначаем цели
             foreach (var bot in Bots)
             {
@@ -68,18 +93,18 @@ public class AttackerTeamManager : TeamManager
 
                 if (bot.Role == BotRole.Scout)
                 {
-                    var chanceToGoToNeutral = Random.Range(0, 2);
-                    if (chanceToGoToNeutral == 0)
-                    {
-                        var roadZones = MapManager.Instance.RoadZones;
-                        if (roadZones.Count > 0)
-                            MoveBotToZoneOrPeek(bot, roadZones[Random.Range(0, roadZones.Count)]);
-                    }
-                    else
+                    bool goNeutral = Random.value < scoutNeutralProbability;
+                    if (goNeutral)
                     {
                         var neutralZones = MapManager.Instance.NeutralZones;
                         if (neutralZones.Count > 0)
                             MoveBotToZoneOrPeek(bot, neutralZones[Random.Range(0, neutralZones.Count)]);
+                    }
+                    else
+                    {
+                        var roadZones = MapManager.Instance.RoadZones;
+                        if (roadZones.Count > 0)
+                            MoveBotToZoneOrPeek(bot, roadZones[Random.Range(0, roadZones.Count)]);
                     }
                 }
             }
@@ -124,7 +149,7 @@ public class AttackerTeamManager : TeamManager
                 if (enemyBots[i] != null) enemyAlive++;
         }
 
-        if (enemyAlive - Bots.Count < _rotationThreshold || _isRotated) return;
+        if (enemyAlive - Bots.Count < rotationThreshold || _isRotated) return;
         _isRotated = true;
         foreach (var bot in Bots)
         {
@@ -183,5 +208,34 @@ public class AttackerTeamManager : TeamManager
             return sameSiteFallback;
 
         return roadZones.Count > 0 ? roadZones[Random.Range(0, roadZones.Count)] : null;
+    }
+
+    // Weighted random по зональным весам. Если все веса ≤ 0 — uniform random (старое поведение).
+    // Используется для выбора атакуемого сайта по attackWeight: на референс-карте можно
+    // выставить siteA.attackWeight = 1.0, siteB.attackWeight = 1.5 → атакеры в 1.5 раза
+    // чаще выбирают B (так регулируется карта-специфичный приоритет атаки).
+    private static SiteZoneComponent PickWeightedSite(List<SiteZoneComponent> sites, BotRole role)
+    {
+        if (sites == null || sites.Count == 0) return null;
+        if (sites.Count == 1) return sites[0];
+
+        float total = 0f;
+        for (int i = 0; i < sites.Count; i++)
+        {
+            float w = Mathf.Max(0f, sites[i].GetWeight(role));
+            total += w;
+        }
+
+        if (total <= 0f)
+            return sites[Random.Range(0, sites.Count)];
+
+        float pick = Random.value * total;
+        float acc = 0f;
+        for (int i = 0; i < sites.Count; i++)
+        {
+            acc += Mathf.Max(0f, sites[i].GetWeight(role));
+            if (pick <= acc) return sites[i];
+        }
+        return sites[sites.Count - 1];
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -61,12 +62,6 @@ public static class HitModel
         return Mathf.Clamp01(p);
     }
 
-    /// <summary>
-    /// Линейный фолл-офф: 1.0 в пределах <c>fullAccuracyRange</c>,
-    /// дальше линейно убывает до <c>minAccuracyAtMaxRange</c> на <c>maxRange</c>.
-    /// За <c>maxRange</c> — остаётся <c>minAccuracyAtMaxRange</c> (не уходим в 0,
-    /// чтобы перестрелки через всю карту были возможны, но маловероятны).
-    /// </summary>
     private static float ComputeDistanceFalloff(float dist, HitModelConfig cfg)
     {
         if (cfg.maxRange <= cfg.fullAccuracyRange) return 1f;
@@ -76,47 +71,57 @@ public static class HitModel
         return Mathf.Lerp(1f, Mathf.Clamp01(cfg.minAccuracyAtMaxRange), t);
     }
 
-    /// <summary>
-    /// Проверка «цель в укрытии»: смотрит в 4 соседние с целью клетки сетки карты.
-    /// Если хотя бы одна — Wall или содержит cover-блок (по <c>MapGenerator.IsCellOccupiedByCover</c>),
-    /// цель считается «приникнувшей» (защищена с одного бока).
-    ///
-    /// Дополнительно требуем, чтобы это укрытие было НЕ на той стороне, откуда стреляют —
-    /// иначе бот, стоящий вплотную к стене лицом к нам, всё равно «в укрытии», что неверно.
-    /// </summary>
-    public static bool IsTargetUsingCover(
-        Vector3 shooterPos,
-        Vector3 targetPos,
-        MapGenerator map)
+    public static bool IsTargetUsingCover(Vector3 shooterPos, Vector3 targetPos, HitModelConfig cfg)
     {
-        if (map == null) return false;
+        if (cfg == null) return false;
 
-        float cell = map.BlockSize;
-        if (cell <= 0f) return false;
+        MapManager mapManager = MapManager.Instance;
+        if (mapManager == null) return false;
 
-        int tx = Mathf.RoundToInt(targetPos.x / cell);
-        int tz = Mathf.RoundToInt(targetPos.z / cell);
-
-        // Направление "от цели к стрелку" в клеточных координатах.
-        // Сторона укрытия, ПРОТИВОПОЛОЖНАЯ стрелку, нам не помогает — она не блокирует луч.
         Vector3 toShooter = shooterPos - targetPos;
-        float ax = Mathf.Abs(toShooter.x);
-        float az = Mathf.Abs(toShooter.z);
-        int shooterDx = ax > az ? (toShooter.x > 0f ? 1 : -1) : 0;
-        int shooterDz = ax > az ? 0 : (toShooter.z > 0f ? 1 : -1);
+        toShooter.y = 0f;
+        float toShooterSqr = toShooter.sqrMagnitude;
+        if (toShooterSqr < 0.0001f) return false; // стрелок и цель в одной точке — укрытие неопределено
 
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
-        for (int i = 0; i < 4; i++)
+        float invLen = 1f / Mathf.Sqrt(toShooterSqr);
+        Vector3 toShooterNorm = new Vector3(toShooter.x * invLen, 0f, toShooter.z * invLen);
+
+        float cosTol = Mathf.Clamp(cfg.coverAngleCosTolerance, -1f, 1f);
+
+        // Перебор всех слотов всех зон. На картах MVP-масштаба (~10–50 зон, ~10–30 слотов
+        // на зону) это сотни проверок — это дёшево по сравнению с реактивным циклом бота.
+        // При необходимости можно ввести пространственный индекс TheTacticalSlotList
+        // (как TheHidingSpotList в CS:GO) — но пока не требуется.
+        foreach (MapZoneComponent zone in mapManager.Zones)
         {
-            int nx = tx + dx[i];
-            int nz = tz + dz[i];
+            if (zone == null) continue;
+            IReadOnlyList<TacticalSlot> slots = zone.TacticalSlots;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                TacticalSlot slot = slots[i];
+                if (slot == null) continue;
 
-            // Сосед на стороне стрелка не считаем укрытием — луч пришёл оттуда.
-            if (dx[i] == shooterDx && dz[i] == shooterDz) continue;
+                // Цель должна быть рядом со слотом (в его зоне влияния).
+                Vector3 toSlot = slot.worldPos - targetPos;
+                toSlot.y = 0f;
+                float r = slot.influenceRadius;
+                if (toSlot.sqrMagnitude > r * r) continue;
 
-            if (map.IsCellWall(nx, nz)) return true;
-            if (map.IsCellOccupiedByCover(nx, nz)) return true;
+                // facingDir смотрит "наружу через cover". Значит cover лежит в (-facingDir).
+                // Цель прикрыта, если стрелок находится в направлении (-facingDir) от цели,
+                // т.е. вектор toShooter сонаправлен с -facingDir.
+                Vector3 facing = slot.facingDir;
+                facing.y = 0f;
+                float facingSqr = facing.sqrMagnitude;
+                if (facingSqr < 0.0001f) continue;
+                float facingInv = 1f / Mathf.Sqrt(facingSqr);
+                float fx = facing.x * facingInv;
+                float fz = facing.z * facingInv;
+
+                // dot(toShooterNorm, -facing) > cosTol  ⇔  toShooterNorm "смотрит" в сторону cover.
+                float dotCover = -(toShooterNorm.x * fx + toShooterNorm.z * fz);
+                if (dotCover >= cosTol) return true;
+            }
         }
 
         return false;
@@ -152,6 +157,8 @@ public class HitModelConfig
     [Header("Цель в укрытии")]
     [Range(0f, 1f), Tooltip("Штраф к p_hit, если цель «приникла» к стене/cover-блоку сбоку от линии огня. 0.5 = шанс попадания падает вдвое.")]
     public float targetCoverPenalty = 0.5f;
+    [Range(-1f, 1f), Tooltip("Допуск по направлению cover-а (косинус угла). 0.5 ≈ ±60° от линии target→shooter. Чем выше — тем точнее cover должен совпадать с направлением огня, чтобы считаться прикрывающим. 1.0 = только идеально по линии, 0.0 = любая сторона (включая бок).")]
+    public float coverAngleCosTolerance = 0.5f;
 
     [Header("Цель движется")]
     [Min(0f), Tooltip("Порог скорости (м/с), выше которого цель считается «бегущей». 0 = штраф за движение отключён.")]
