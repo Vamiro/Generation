@@ -58,16 +58,24 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
 
     // ─────────────────── Read-only сводка для инспектора ───────────────────
     [Header("Сводка (read-only)")]
-    [SerializeField, ReadOnlyInInspector] private int matchesPlayed;
+    [SerializeField, ReadOnlyInInspector, Tooltip("Всего сыгранных матчей (включая таймауты).")]
+    private int matchesPlayed;
+    [SerializeField, ReadOnlyInInspector, Tooltip("Матчей, завершившихся победой одной из сторон (таймауты исключены). Только по ним считаются винрейты и средние.")]
+    private int decisiveMatches;
     [SerializeField, ReadOnlyInInspector] private int attackerWins;
     [SerializeField, ReadOnlyInInspector] private int defenderWins;
-    [SerializeField, ReadOnlyInInspector] private int timeouts;
-    [SerializeField, ReadOnlyInInspector] private string attackerWinRate = "—";
-    [SerializeField, ReadOnlyInInspector] private string defenderWinRate = "—";
-    [SerializeField, ReadOnlyInInspector] private string timeoutRate = "—";
-    [SerializeField, ReadOnlyInInspector] private string avgRoundDuration = "—";
-    [SerializeField, ReadOnlyInInspector] private string avgTimeToFirstBlood = "—";
-    [SerializeField, ReadOnlyInInspector] private string avgWinnerSurvivors = "—";
+    [SerializeField, ReadOnlyInInspector, Tooltip("Матчи, завершившиеся по таймауту. В статистику винрейтов/средних не входят, просто счётчик.")]
+    private int timeouts;
+    [SerializeField, ReadOnlyInInspector, Tooltip("% от decisiveMatches (без учёта таймаутов).")]
+    private string attackerWinRate = "—";
+    [SerializeField, ReadOnlyInInspector, Tooltip("% от decisiveMatches (без учёта таймаутов).")]
+    private string defenderWinRate = "—";
+    [SerializeField, ReadOnlyInInspector, Tooltip("Среднее по decisiveMatches (таймауты не входят).")]
+    private string avgRoundDuration = "—";
+    [SerializeField, ReadOnlyInInspector, Tooltip("Среднее по decisiveMatches (таймауты не входят).")]
+    private string avgTimeToFirstBlood = "—";
+    [SerializeField, ReadOnlyInInspector, Tooltip("Среднее по decisiveMatches (таймауты не входят).")]
+    private string avgWinnerSurvivors = "—";
 
     [Header("Сайты (атакеры)")]
     [SerializeField, ReadOnlyInInspector, TextArea(2, 6)] private string siteAttackStats = "—";
@@ -127,7 +135,9 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
             case MatchOutcome.Timeout: timeouts++; break;
         }
 
-        if (!string.IsNullOrEmpty(attackerTargetSiteName))
+        // Per-site винрейт считаем только по решающим матчам — иначе таймауты
+        // раздуют знаменатель (attacks) и winrate сайта станет заниженным.
+        if (outcome != MatchOutcome.Timeout && !string.IsNullOrEmpty(attackerTargetSiteName))
         {
             if (!_bySite.TryGetValue(attackerTargetSiteName, out var t))
                 t = (0, 0);
@@ -167,6 +177,7 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
         _deathsThisMatch = 0;
 
         matchesPlayed = 0;
+        decisiveMatches = 0;
         attackerWins = 0;
         defenderWins = 0;
         timeouts = 0;
@@ -224,17 +235,24 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
 
     private void RefreshInspector()
     {
-        if (matchesPlayed > 0)
+        // Все агрегаты (винрейты, средние) считаем ТОЛЬКО по матчам, завершившимся
+        // победой одной из сторон. Таймауты — это «недоигранные» раунды, они искажают
+        // и среднюю длительность (всегда == matchTimeout), и винрейты, и avgWinnerSurvivors.
+        // Их количество выводится отдельным полем `timeouts`.
+        decisiveMatches = attackerWins + defenderWins;
+
+        if (decisiveMatches > 0)
         {
-            attackerWinRate = $"{100f * attackerWins / matchesPlayed:F1}%";
-            defenderWinRate = $"{100f * defenderWins / matchesPlayed:F1}%";
-            timeoutRate = $"{100f * timeouts / matchesPlayed:F1}%";
+            attackerWinRate = $"{100f * attackerWins / decisiveMatches:F1}%";
+            defenderWinRate = $"{100f * defenderWins / decisiveMatches:F1}%";
 
             float sumDur = 0f, sumWinnerSurv = 0f;
             int firstBloodSamples = 0;
             float sumFirstBlood = 0f;
             foreach (var m in _matches)
             {
+                if (m.Outcome == nameof(MatchOutcome.Timeout)) continue;
+
                 sumDur += m.DurationSeconds;
                 if (m.Outcome == nameof(MatchOutcome.AttackersWin)) sumWinnerSurv += m.AttackersAliveAtEnd;
                 else if (m.Outcome == nameof(MatchOutcome.DefendersWin)) sumWinnerSurv += m.DefendersAliveAtEnd;
@@ -244,15 +262,15 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
                     firstBloodSamples++;
                 }
             }
-            avgRoundDuration = $"{sumDur / matchesPlayed:F1} s";
-            avgWinnerSurvivors = $"{sumWinnerSurv / matchesPlayed:F2}";
+            avgRoundDuration = $"{sumDur / decisiveMatches:F1} s";
+            avgWinnerSurvivors = $"{sumWinnerSurv / decisiveMatches:F2}";
             avgTimeToFirstBlood = firstBloodSamples > 0
-                ? $"{sumFirstBlood / firstBloodSamples:F1} s ({firstBloodSamples}/{matchesPlayed} матчей)"
+                ? $"{sumFirstBlood / firstBloodSamples:F1} s ({firstBloodSamples}/{decisiveMatches} матчей)"
                 : "—";
         }
         else
         {
-            attackerWinRate = defenderWinRate = timeoutRate = "—";
+            attackerWinRate = defenderWinRate = "—";
             avgRoundDuration = avgWinnerSurvivors = avgTimeToFirstBlood = "—";
         }
 

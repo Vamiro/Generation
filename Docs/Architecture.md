@@ -421,10 +421,49 @@ p_hit = baseAccuracy
 - `MapGenerator` — не singleton; `BotComponent.ResolveMapGenerator` лениво кэширует ссылку через `FindFirstObjectByType` (один раз за сессию). Перегенерация карты (R) пересоздаёт содержимое того же компонента, ссылку не инвалидирует.
 - На `MapGenerator` добавлены публичные `BlockSize`, `IsCellWall(int x, int z)` рядом с уже существовавшим `IsCellOccupiedByCover`.
 
-**Текущие ограничения (этапы C–F дорожной карты):**
-- Нет тактических слотов в зоне — `repositionDelay` гоняет бота по случайным точкам в `GetRandomPointInZone()` (этап C: `TacticalSlot`).
-- Нет событийной шины (защитник не реагирует на "пуш атакеров", пока кто-то не умрёт) — этап D.
+### 5.2. TacticalSlots (этап C плана переработки ботов)
+
+Файлы:
+- `Assets/Scripts/Map/TacticalSlot.cs` — POCO: `worldPos`, `facingDir`, `kind`, `coverScore`, `occupant`.
+- `Assets/Scripts/Map/MapGenerator.TacticalSlots.cs` — `BuildTacticalSlots()`, вызывается в пайплайне на шаге `[9.6]`.
+
+**Идея.** Раньше «куда бежать защитнику на сайте» = `zone.GetRandomPointInZone()` (случайная Floor-клетка). Получалось «все стоят кучкой в случайной точке». Теперь у каждой зоны есть набор именованных тактических позиций, привязанных к ковер-блокам сайта/дороги. Бот резервирует слот через `MapZoneComponent.TryAcquireSlot(kind, this)` — это даёт распределение по углам и направление взгляда после прихода (`facingDir`).
+
+**Правила построения слота (см. также комментарий в `MapGenerator.TacticalSlots.cs`):**
+1. Клетка-кандидат — Floor-клетка одного из типов: `Site`, `Neutral`, `Room`, `Main`, `Link`. `Spawn`/`Pocket` исключены.
+2. Сама клетка не должна быть cover. Хотя бы один из 4 соседей должен быть `Cover` (`coverOccupancy[nx,nz]==true`).
+3. Тип слота определяется типом клетки:
+   - `Site` / `Neutral` / `Room` → `HoldDefender` (защитник стоит у cover, смотрит «через» cover на вход в зону).
+   - `Main` / `Link` → `PeekAttacker` (атакер стоит у cover на дороге, смотрит вглубь).
+4. `facingDir` = усреднённый нормал от клетки в сторону, **противоположную cover-блокам**. Это значит: бот стоит за cover и держит «через него» открытое пространство.
+5. `coverScore` (1–4) — сколько сторон клетки закрыты `wall`/`cover`. Хранится для будущих эвристик (этап F: predilection крайних углов).
+
+**Бронирование (`MapZoneComponent.TryAcquireSlot`):**
+- Берёт ближайший к боту свободный слот указанного типа; при равенстве дистанций — детерминированный tie-break по `(x, z)`.
+- Не использует `Random`, поэтому распределение слотов воспроизводимо при том же сиде.
+- `BotComponent` отпускает слот в `Die()`, при `MoveToZone(otherZone)` и при `TryMoveToTacticalSlot(otherZone, ...)`.
+
+**Интеграция в боте:**
+- `BotComponent.TryMoveToTacticalSlot(zone, kind)` → `bool` — тонкий враппер над `TryAcquireSlot` + `SetDestination(slot.worldPos)`. Возвращает `false`, если зона без слотов нужного типа → caller делает фоллбэк на `MoveToZone(zone)`.
+- В `Update`/idle-ветке добавлен `HandleIdleFacing` — медленно доворачиваем бота в `slot.facingDir` (через `aimTurnSpeed`), пока он стоит на слоте и не в бою. Это и есть «держать угол».
+- `HandleIdleReposition` теперь сначала пытается **пересесть в другой свободный слот того же типа в той же зоне** (ротация между Hold-углами), и только если таких нет — фоллбэк на `GetRandomPointInZone`.
+
+**Интеграция в команды:**
+- `DefenderTeamManager.AssignRoleSafe` — для роли `Defender` пробует `TryMoveToTacticalSlot(site, HoldDefender)`; фоллбэк — `MoveToZone(site)`.
+- `DefenderTeamManager.TryRepositionDefenders` — на дороге пробует `HoldDefender`, потом `PeekAttacker`, потом фоллбэк.
+- `AttackerTeamManager.ChooseTargetSite` — для Attacker/Flanker/Scout стартовых движений по дорогам/нейтрали ходит через `MoveBotToZoneOrPeek` (пробует `PeekAttacker`, иначе `MoveToZone`).
+- `AttackerTeamManager.CheckOnPosition` — после синхронного захода атакеров на сайт каждый пытается занять `HoldDefender`-слот сайта (это и есть постплант-позиции у углов), иначе фоллбэк.
+
+**Что делать, если коверов мало или нет:**
+- Если `enableCovers = false` — слоты не строятся, поведение откатывается на этап A (рандом точек в зоне).
+- Если в конкретной зоне 0 cover-блоков (бывает на маленьких комнатах) — слотов в ней нет, бот опять идёт через `MoveToZone`. Это безопасный фоллбэк, никаких NRE.
+
+**Доступ из бота к `MapGenerator`:** `BotComponent.ResolveMapGenerator()` уже лениво кэшировал ссылку для HitModel; для слотов сам `MapGenerator` не нужен — слоты живут в `MapZoneComponent`, бот общается только с зоной.
+
+**Текущие ограничения (этапы D–F дорожной карты):**
+- Нет событийной шины (защитник не реагирует на «пуш атакеров», пока кто-то не умрёт) — этап D.
 - Параметры пока в полях `BotComponent` / `HitModelConfig`, а не в `BotProfile` SO — этап E.
+- Слоты строятся «по одному на каждый cover-блок»; продвинутые паттерны (Crossfire — пара слотов, mutually-visible; Default setup — 1 close + 1 deep на сайте) — этап F.
 
 ---
 
@@ -436,13 +475,13 @@ p_hit = baseAccuracy
 
 ### `AttackerTeamManager`
 - Распределение ролей: 2 Attacker, 2 Flanker, 1 Scout.
-- Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной.
-- Ротация цели: при существенной разнице в численности (`_rotationThreshold = 2`) — все становятся Attacker и идут на новый сайт.
-- Когда все боты пришли на исходные позиции — синхронный заход на сайт.
+- Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной. Все эти движения теперь идут через `MoveBotToZoneOrPeek` — сначала пробуется `PeekAttacker`-слот в зоне, фоллбэк — `MoveToZone` (этап C, см. 5.2).
+- Ротация цели: при существенной разнице в численности (`_rotationThreshold = 2`) — все становятся Attacker и идут на новый сайт (через нейтраль с тем же peek-фоллбэком).
+- Когда все боты пришли на исходные позиции — синхронный заход на сайт. На самом сайте атакеры пытаются занять `HoldDefender`-слот (углы у cover) — это и есть postplant-позиции.
 
 ### `DefenderTeamManager`
-- Распределение: по 2 защитника на каждый сайт + 1 Scout.
-- Каждые `_delay = 10` сек случайно репозиционирует часть защитников ближе к Main или Link (имитация ротации).
+- Распределение: по 2 защитника на каждый сайт + 1 Scout. `AssignRoleSafe` для роли `Defender` пробует `TryMoveToTacticalSlot(site, HoldDefender)` — защитник идёт в hold-spot сайта, разворачивается на вход; фоллбэк — `MoveToZone(site)`.
+- Каждые `_delay = 10` сек случайно репозиционирует часть защитников ближе к Main или Link — теперь через тактические слоты: сначала пробуется `HoldDefender`, потом `PeekAttacker`, потом фоллбэк на случайную точку дороги.
 
 ---
 
@@ -550,14 +589,19 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 
 | Поле | Что показывает |
 |---|---|
-| `matchesPlayed`, `attackerWins`, `defenderWins`, `timeouts` | Базовые счётчики |
-| `attackerWinRate` / `defenderWinRate` / `timeoutRate` | Проценты от matchesPlayed |
-| `avgRoundDuration` | Среднее время матча в игровых секундах |
-| `avgTimeToFirstBlood` | Среднее время до первой смерти; «N/M матчей» — сколько матчей вообще имели kills |
-| `avgWinnerSurvivors` | Среднее число выживших ботов победившей стороны (proxy для KD) |
-| `siteAttackStats` | Per-site: сколько раз атакеры выбрали этот сайт + winrate |
-| `deathsAttackerRole` / `deathsFlankerRole` / `deathsScoutRole` / `deathsDefenderRole` | Накопленные смерти по ролям |
-| `topKillZones` | Топ-5 зон по количеству смертей |
+| `matchesPlayed` | Всего сыгранных матчей (включая таймауты) |
+| `decisiveMatches` | Матчей, завершившихся победой одной из сторон (= `attackerWins + defenderWins`). Знаменатель для всех винрейтов и средних |
+| `attackerWins`, `defenderWins` | Базовые счётчики побед |
+| `timeouts` | Сколько раундов завершились по таймауту. **Не участвуют** в винрейтах/средних — только счётчик |
+| `attackerWinRate` / `defenderWinRate` | Проценты от `decisiveMatches` (без таймаутов) |
+| `avgRoundDuration` | Среднее время матча в игровых секундах. Считается **только** по `decisiveMatches` — иначе таймауты завышали бы среднее до `matchTimeout` |
+| `avgTimeToFirstBlood` | Среднее время до первой смерти; «N/M матчей» — сколько решающих матчей имели kills |
+| `avgWinnerSurvivors` | Среднее число выживших ботов победившей стороны (proxy для KD), только по `decisiveMatches` |
+| `siteAttackStats` | Per-site: сколько раз атакеры выбрали этот сайт + winrate. **Таймауты не входят** ни в `attacks`, ни в `wins` |
+| `deathsAttackerRole` / `deathsFlankerRole` / `deathsScoutRole` / `deathsDefenderRole` | Накопленные смерти по ролям (включая таймаутные матчи) |
+| `topKillZones` | Топ-5 зон по количеству смертей (включая таймаутные матчи) |
+
+> Решение: таймаут — это «недоигранный» раунд (`elapsed >= matchTimeout`). Если включать его в средние, `avgRoundDuration` всегда подтягивается к потолку, `avgWinnerSurvivors` к 0 (или к составу команды, если считать выживших стороны без победы), а винрейты обеих сторон занижаются. Поэтому в статистику попадают только матчи с явным победителем, а количество таймаутов сохраняется отдельным счётчиком как сигнал, что параметры карты/ботов нужно настраивать (слишком короткий `matchTimeout` или слишком пассивные боты).
 
 **Управление в инспекторе:**
 - `autoSaveOnFinish` (default true) — на `StopLoop` (S) и `OnApplicationQuit` сохраняет всю серию в Storage.
@@ -599,7 +643,7 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
 | Нет batch-симуляций | `MatchManager` гоняет серию матчей (`maxMatches`) + headless-режим, `MatchStatsCollector` пишет per-match метрики в Storage. Не хватает только runner-а по списку карт (param sweep). | Этап 5 roadmap |
 | Метрики только смерти + per-match агрегаты | `DeathData` (координаты) + `StatsData` (исход, длительность, kill-zones) | следующий шаг — kill-heatmap из StatsData |
-| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этапы A (HP, поворот, scoring, reposition) и B (HitModel: точность от дистанции/укрытия/движения) — **выполнены**, см. раздел 5 / 5.1. |
+| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этапы A (HP, поворот, scoring, reposition), B (HitModel: точность от дистанции/укрытия/движения) и C (TacticalSlots: Hold/Peek позиции у cover-блоков, бронирование) — **выполнены**, см. разделы 5 / 5.1 / 5.2. |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
 
 ---

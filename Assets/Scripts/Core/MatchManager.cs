@@ -423,22 +423,57 @@ public class MatchManager : MonoSingleton<MatchManager>
     private List<BotComponent> SpawnBots(SpawnZoneComponent zone, Transform parent)
     {
         var result = new List<BotComponent>(botsPerTeam);
+
+        const float spawnY = 1f;
+        const float roofDeltaThreshold = 0.9f; // ~ blockSize; крыша 1-го яруса как раз настолько выше
+        const int sampleAttempts = 8;
+
         for (int i = 0; i < botsPerTeam; i++)
         {
-            Vector3 pos = zone.GetRandomPointInZone();
-            pos.y = 1f;
+            Vector3 spawnPos = default;
+            bool found = false;
+            Vector3 lastPos = default;
+            float lastHitY = float.NaN;
+            int navMeshHits = 0;
 
-            if (snapSpawnToNavMesh)
+            for (int attempt = 0; attempt < sampleAttempts && !found; attempt++)
             {
-                if (!NavMesh.SamplePosition(pos, out var hit, navMeshSampleRadius, NavMesh.AllAreas))
+                Vector3 pos = zone.GetRandomPointInZone();
+                pos.y = spawnY;
+                lastPos = pos;
+
+                if (!snapSpawnToNavMesh)
                 {
-                    Debug.LogWarning($"MatchManager: не удалось найти точку на NavMesh рядом с {pos} (radius={navMeshSampleRadius}). Бот пропущен.");
-                    continue;
+                    spawnPos = pos;
+                    found = true;
+                    break;
                 }
-                pos = hit.position;
+
+                if (!NavMesh.SamplePosition(pos, out var hit, navMeshSampleRadius, NavMesh.AllAreas))
+                    continue;
+
+                navMeshHits++;
+                lastHitY = hit.position.y;
+
+                // Если снап ушёл вверх больше, чем на высоту одного яруса — это крыша
+                // соседней стены/укрытия. Берём другую sample-точку.
+                if (hit.position.y - pos.y > roofDeltaThreshold)
+                    continue;
+
+                spawnPos = hit.position;
+                found = true;
             }
 
-            var bot = Instantiate(botPrefab, pos, Quaternion.identity, parent);
+            if (!found)
+            {
+                Debug.LogWarning(
+                    $"MatchManager: не удалось найти точку на NavMesh рядом с {lastPos} в {zone.name} за {sampleAttempts} попыток " +
+                    $"(radius={navMeshSampleRadius}, navMeshHits={navMeshHits}, lastHitY={(float.IsNaN(lastHitY) ? "—" : lastHitY.ToString("F2"))}). " +
+                    "Бот пропущен.");
+                continue;
+            }
+
+            var bot = Instantiate(botPrefab, spawnPos, Quaternion.identity, parent);
             result.Add(bot);
         }
         return result;

@@ -81,7 +81,7 @@ public class DefenderTeamManager : TeamManager
         // Сначала роль (она задаёт скорость и т.п.), потом — попытка занять тактический слот
         // в зоне. Если слотов нет (этап C не нагенерил из-за отсутствия коверов) — фоллбэк
         // на стандартный MoveToZone внутри AssignRole.
-        bot.AssignRole(role, zone: null);
+        bot.AssignRole(role, initialZone: null);
         if (zone != null && role == BotRole.Defender)
         {
             if (!bot.TryMoveToTacticalSlot(zone, TacticalSlotKind.HoldDefender))
