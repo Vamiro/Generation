@@ -72,10 +72,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   id: 0
-  attackWeight: 0.5
-  defenseWeight: 0.5
-  flankWeight: 1
-  scoutWeight: 0.5
   boxColliders: []
   roadToSite: {fileID: 0}
   roadType: 1

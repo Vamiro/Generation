@@ -67,8 +67,4 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   id: 1
-  attackWeight: 0
-  defenseWeight: 0
-  flankWeight: 0.5
-  scoutWeight: 0.5
   boxCollider: {fileID: 210443705379838656}

@@ -529,12 +529,12 @@ p_hit = baseAccuracy
 ### `AttackerTeamManager`
 - Распределение ролей вынесено в инспектор (`attackerCount / flankerCount / scoutCount`, default 2/2/1). Хвост сверх суммы (если `botsPerTeam` больше) получает Attacker.
 - Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной (`scoutNeutralProbability` в инспекторе, default 0.5). Все эти движения идут через `MoveBotToZoneOrPeek` — сначала пробуется `PeekAttacker`-слот в зоне, фоллбэк — `MoveToZone` (этап C, см. 5.2).
-- **Выбор атакуемого сайта — weighted random по `site.GetWeight(BotRole.Attacker)`** (`attackWeight` в `MapZoneComponent`). Если все веса 0 — uniform random (старое поведение). На референс-карте можно выставить `siteA.attackWeight = 1.0, siteB.attackWeight = 1.5` → атакеры в 1.5 раза чаще выбирают B.
+- **Выбор атакуемого сайта — weighted random по `site.GetWeight(BotRole.Attacker)`** (значения берутся из `MapManager.siteAWeights`/`siteBWeights`, см. §8). Если все веса 0 — uniform random (старое поведение). На референс-карте: `siteAWeights.attack = 1.0`, `siteBWeights.attack = 1.5` → атакеры в 1.5 раза чаще выбирают B.
 - Ротация цели: при разнице в численности `rotationThreshold` (инспектор, default 2) — все становятся Attacker и идут на новый сайт.
 - Когда все боты пришли на исходные позиции — синхронный заход на сайт. На самом сайте атакеры пытаются занять `HoldDefender`-слот (углы у cover) — postplant-позиции.
 
 ### `DefenderTeamManager`
-- Распределение защитников по сайтам — **weighted по `site.GetWeight(BotRole.Defender)`** (`defenseWeight`). Если все веса 0 — равное по `defendersPerSite` на каждый сайт (старое поведение). Если веса заданы — пропорциональное распределение через largest-remainder method. На референс-карте: `siteA.defenseWeight = 1.5, siteB.defenseWeight = 1.0` → 60% защитников на A.
+- Распределение защитников по сайтам — **weighted по `site.GetWeight(BotRole.Defender)`** (из `MapManager.siteAWeights`/`siteBWeights.defense`, см. §8). Если все веса 0 — равное по `defendersPerSite` на каждый сайт (старое поведение). Если веса заданы — пропорциональное распределение через largest-remainder method. На референс-карте: `siteAWeights.defense = 1.5`, `siteBWeights.defense = 1.0` → 60% защитников на A.
 - `scoutCount` (инспектор, default 1) — сколько ботов идут в Scout (нейтраль/дороги). Остаток после защитников.
 - `AssignRoleSafe` для роли `Defender` пробует `TryMoveToTacticalSlot(site, HoldDefender)` — защитник идёт в hold-spot сайта, разворачивается на вход; фоллбэк — `MoveToZone(site)`.
 - Каждые `repositionDelay` сек (инспектор, default 10) случайно репозиционирует часть защитников. **Старая chance-таблица (`0|1`, `2`, `3` из 4) заменена на 3 инспектор-веса** (`repositionMainWeight / repositionLinkWeight / repositionStayWeight`, default 2/1/1 — даёт ту же пропорцию). Через тактические слоты: сначала пробуется `HoldDefender`, потом `PeekAttacker`, потом фоллбэк на случайную точку дороги.
@@ -678,12 +678,28 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 
 ---
 
-## 8. Зональные веса (`MapZoneComponent`)
+## 8. Зональные веса (`MapManager`)
 
-Каждая зона имеет 4 веса для разных ролей:
-- `attackWeight`, `defenseWeight`, `flankWeight`, `scoutWeight`.
+Веса для разных ролей **централизованы в `MapManager`**, а не размазаны по зонам. Это упрощает калибровку: на референс-карте (Dust2/Anubis) баланс правится в одном месте, и **переживает регенерацию процедурной карты** (R) — `MapManager` живёт между регенерациями, а зоны пересоздаются.
 
-`GetWeight(role)` → возвращает соответствующий вес.
+**Структура (`MapManager.cs`):**
+
+```csharp
+[Serializable]
+public struct ZoneRoleWeights { public float attack, defense, flank, scout; }
+
+[SerializeField] private ZoneRoleWeights siteAWeights = ZoneRoleWeights.Default; // (1,1,1,1)
+[SerializeField] private ZoneRoleWeights siteBWeights = ZoneRoleWeights.Default;
+```
+
+**Идентификация сайтов:** A = сайт с минимальным `SpawnId`, B = со следующим. На процедурной карте `SpawnId` назначается генератором детерминированно (см. `MapGenerator.RuntimeZones`). На референс-карте — пользователь выставляет `SpawnId = 0` / `1` в инспекторе `SiteZoneComponent` вручную.
+
+**Публичный API:**
+
+| Метод | Возвращает |
+|---|---|
+| `MapManager.GetWeight(zone, role)` | Вес зоны для роли. Для не-Site-зон или сайтов с индексом ≥ 2 — `0`. |
+| `MapZoneComponent.GetWeight(role)` | Тонкая обёртка над `MapManager.GetWeight(this, role)`. Сохранена для обратной совместимости. |
 
 **Где используются (Этап 1 калибровочного блока):**
 
@@ -692,15 +708,18 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 | Выбор атакуемого сайта | `AttackerTeamManager.PickWeightedSite` | Weighted random по `siteA.GetWeight(Attacker)` vs `siteB`. Если все веса 0 → uniform random. |
 | Распределение защитников по сайтам | `DefenderTeamManager.ComputeDefendersDistribution` | Пропорциональное распределение через largest-remainder method. Если все веса 0 → равно по `defendersPerSite` на сайт. |
 
-**Что НЕ использует пока (по-прежнему точки интеграции):**
-- `flankWeight` / `scoutWeight` — не учитываются при выборе зоны для Flanker/Scout.
-- Веса дорог (`RoadZoneComponent`) — для выбора Main vs Link маршрута игнорируются (сейчас всегда Main для атакера, Link для фланкера).
+**Что НЕ использует пока (точки будущей интеграции):**
+- `flank` / `scout` — не учитываются при выборе зоны для Flanker/Scout.
+- Веса дорог (`RoadZoneComponent`) — сейчас выбор маршрута игнорирует веса (атакер всегда Main, фланкер всегда Link). Если потребуется — добавить поля `mainRoad*Weights` / `linkRoad*Weights` в `MapManager` и читать в `AttackerTeamManager.FindPreferredRoad`.
+- Нейтрали и спавны — весов в `MapManager` сейчас нет (никто не читает).
 
 **Способ калибровки на референс-карте:**
-1. Расставить сайты и дороги через `MapZoneComponent` (или дать `MapGenerator` сгенерировать).
-2. В инспекторе каждой Site-зоны выставить `attackWeight` и `defenseWeight` исходя из реальной карты (например, для Dust2-like B-сайт чуть слабее держится → `siteB.defenseWeight = 0.9, siteA.defenseWeight = 1.1`).
+1. Расставить сайты вручную (например, скопировав геометрию Dust2). В инспекторе каждой `SiteZoneComponent` выставить `SpawnId = 0` для A, `SpawnId = 1` для B.
+2. В инспекторе `MapManager` (один объект на сцене) выставить `siteAWeights` и `siteBWeights` под реальную карту. Например, для Dust2-like, где B-сайт чуть слабее держится: `siteAWeights.defense = 1.1`, `siteBWeights.defense = 0.9`.
 3. Запустить серию матчей через `MatchManager.maxMatches` в headless-режиме, посмотреть `StatsData.json` и `siteAttackStats`.
 4. Подкрутить веса и повторить.
+
+**Почему не ScriptableObject:** для MVP достаточно одного балансного профиля на сцену. Если в Этапе 5 (batch-симуляция) понадобится менять профили без правки сцены — выделить `ZoneRoleWeights` в `MapBalanceProfile : ScriptableObject` и хранить ссылку в `MapManager`. Архитектурно это +5 строк изменений и совместимо с текущим API.
 
 ---
 
@@ -708,7 +727,7 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 
 | Ограничение | Где | Почему |
 |---|---|---|
-| Веса зон частично интегрированы | `AttackerTeamManager` / `DefenderTeamManager` | `attackWeight` — для выбора сайта атакерами; `defenseWeight` — для распределения защитников. `flankWeight` / `scoutWeight` и веса дорог — пока не используются. См. §8. |
+| Веса зон частично интегрированы | `AttackerTeamManager` / `DefenderTeamManager` | `attack`-вес — для выбора сайта атакерами; `defense`-вес — для распределения защитников. `flank` / `scout` и веса дорог/спавнов/нейтрали — пока не используются. Веса централизованы в `MapManager`, не в зонах. См. §8. |
 | Расстановка укрытий нестабильна | `MapGenerator.Covers.cs` | в активной переработке |
 | Комнаты есть только тип «галерея», нет перекрёстков и ниш | `MapGenerator.Rooms.cs` | Следующая итерация Этапа 1 |
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |

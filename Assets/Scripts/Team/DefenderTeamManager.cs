@@ -5,7 +5,7 @@ using UnityEngine;
 public class DefenderTeamManager : TeamManager
 {
     [Header("Состав команды")]
-    [SerializeField, Min(1), Tooltip("Сколько защитников держат КАЖДЫЙ сайт. Если defenseWeight у зон разные — будет применено как пропорция (см. AssignRoles). Раньше было захардкожено 2.")]
+    [SerializeField, Min(1), Tooltip("Сколько защитников держат КАЖДЫЙ сайт. Если defense-веса у сайтов в MapManager разные — будет применено как пропорция (см. AssignRoles). Раньше было захардкожено 2.")]
     private int defendersPerSite = 2;
     [SerializeField, Min(0), Tooltip("Сколько ботов идут в Scout (разведка нейтрали или дороги). Остаток после распределения по сайтам.")]
     private int scoutCount = 1;
@@ -68,10 +68,11 @@ public class DefenderTeamManager : TeamManager
 
         var sites = MapManager.Instance.SiteZones;
 
-        // Распределение защитников по сайтам по defenseWeight.
+        // Распределение защитников по сайтам по defense-весу из MapManager.
         // Если все веса = 0 → равное распределение по defendersPerSite на каждый сайт.
-        // Если веса заданы → перераспределяем пропорционально (например, siteA.defenseWeight = 1.5,
-        // siteB.defenseWeight = 1.0 → на siteA уйдёт 60% защитников, на siteB — 40%).
+        // Если веса заданы → перераспределяем пропорционально (например,
+        // MapManager.siteAWeights.defense = 1.5, siteBWeights.defense = 1.0 →
+        // на siteA уйдёт 60% защитников, на siteB — 40%).
         int totalDefenders = Mathf.Max(0, Bots.Count - scoutCount);
         int[] perSite = ComputeDefendersDistribution(sites, totalDefenders);
 
@@ -117,7 +118,7 @@ public class DefenderTeamManager : TeamManager
         }
     }
 
-    // Распределение N защитников по списку сайтов пропорционально их defenseWeight.
+    // Распределение N защитников по списку сайтов пропорционально их defense-весу (из MapManager).
     // Если все веса 0 — поровну (с округлением; остаток уходит первому сайту).
     private int[] ComputeDefendersDistribution(IList<SiteZoneComponent> sites, int totalDefenders)
     {

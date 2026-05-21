@@ -7,12 +7,6 @@ public class MapZoneComponent : MonoBehaviour
     [SerializeField] private int id;
     public int SpawnId => id;
 
-    [Header("Zone Weights")]
-    [SerializeField] private float attackWeight = 0f;
-    [SerializeField] private float defenseWeight = 0f;
-    [SerializeField] private float flankWeight = 0f;
-    [SerializeField] private float scoutWeight = 0f;
-
     // Несколько коллайдеров на одну зону: дорога/комната описывается
     // набором прямоугольных сегментов, а не одним большим AABB.
     // Сериализуем список — Unity сохранит ссылки при перезагрузке сцены.
@@ -68,14 +62,9 @@ public class MapZoneComponent : MonoBehaviour
 
     public float GetWeight(BotRole role)
     {
-        return role switch
-        {
-            BotRole.Attacker => attackWeight,
-            BotRole.Defender => defenseWeight,
-            BotRole.Flanker => flankWeight,
-            BotRole.Scout => scoutWeight,
-            _ => 1f
-        };
+        MapManager mapManager = MapManager.Instance;
+        if (mapManager == null) return 0f;
+        return mapManager.GetWeight(this, role);
     }
 
     public Vector3 GetRandomPointInZone()

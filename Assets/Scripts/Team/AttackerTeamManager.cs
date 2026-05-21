@@ -78,7 +78,7 @@ public class AttackerTeamManager : TeamManager
 
         if (!targetSite)
         {
-            // Выбираем SiteVolume по весу attackWeight (если все веса 0 — uniform random).
+            // Выбираем SiteVolume по весу из MapManager.siteAWeights/siteBWeights (если все веса 0 — uniform random).
             targetSite = PickWeightedSite(MapManager.Instance.SiteZones, BotRole.Attacker);
 
             // Назначаем цели
@@ -210,10 +210,10 @@ public class AttackerTeamManager : TeamManager
         return roadZones.Count > 0 ? roadZones[Random.Range(0, roadZones.Count)] : null;
     }
 
-    // Weighted random по зональным весам. Если все веса ≤ 0 — uniform random (старое поведение).
-    // Используется для выбора атакуемого сайта по attackWeight: на референс-карте можно
-    // выставить siteA.attackWeight = 1.0, siteB.attackWeight = 1.5 → атакеры в 1.5 раза
-    // чаще выбирают B (так регулируется карта-специфичный приоритет атаки).
+    // Weighted random по зональным весам из MapManager. Если все веса ≤ 0 — uniform random (старое поведение).
+    // Используется для выбора атакуемого сайта: на референс-карте можно выставить в MapManager
+    // siteAWeights.attack = 1.0, siteBWeights.attack = 1.5 → атакеры в 1.5 раза чаще выбирают B
+    // (так регулируется карта-специфичный приоритет атаки).
     private static SiteZoneComponent PickWeightedSite(List<SiteZoneComponent> sites, BotRole role)
     {
         if (sites == null || sites.Count == 0) return null;
