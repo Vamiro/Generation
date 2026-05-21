@@ -8,21 +8,31 @@ public partial class MapGenerator
     // cover-блока. Бот идёт не в случайную точку зоны, а в осмысленную
     // тактическую точку, где у него есть бок-укрытие и facingDir в сторону угрозы.
     //
-    // Правила (документация в Architecture.md, 5.2):
+    // Правила (документация в Architecture.md, §5.2):
     //  1) Кандидат-клетка = клетка с типом одной из зональных Floor-категорий,
     //     соседствующая с хотя бы одним cover-блоком (coverOccupancy[nx,nz] == true).
     //  2) Сама клетка не должна быть cover.
     //  3) Тип слота определяется типом клетки:
-    //        Site/Neutral/Room → HoldDefender (защитник сидит у cover, смотрит на вход)
-    //        Main/Link         → PeekAttacker (атакер сидит у cover на дороге, смотрит вглубь)
-    //  4) facingDir = усреднённое направление от клетки В СТОРОНУ зоны (для Hold —
-    //     к ближайшему "наружному" соседу; для Peek — к ближайшему соседу-Site).
-    //  5) coverScore = число сторон 4-окрестности, закрытых cover/wall.
+    //        Site/Neutral/Room → HoldDefender
+    //        Main/Link         → PeekAttacker
+    //  4) Поза = центр клетки + случайный джиттер в пределах slotJitter*blockSize
+    //     (чтобы боты не вставали ровно в узлы сетки).
+    //  5) facingDir = усреднённое направление "от cover-а" + случайный yaw-сдвиг
+    //     в пределах facingYawJitter градусов (чтобы взгляд не снэпался на 8 направлений).
+    //  6) coverScore = число сторон 4-окрестности, закрытых cover/wall.
     //
-    // Слоты сохраняются в MapZoneComponent.TacticalSlots той зоны, к которой
-    // относится клетка-кандидат. Зона определяется по уже зарегистрированным
-    // MapZoneComponent-ам через попадание мировой точки клетки в её BoxCollider.
+    // Случайность детерминирована: Random.InitState(currentGenerationSeed) сделан
+    // в MapGenerator.GenerateMap() ДО вызова BuildTacticalSlots.
     // ─────────────────────────────────────────────────────────────────────────
+
+    [Header("Tactical slots (Hold/Peek позиции у укрытий)")]
+    [Range(0f, 0.45f)]
+    [Tooltip("Случайный сдвиг позиции слота от центра клетки (в долях blockSize). 0 = боты стоят строго в узлах сетки. ~0.2 = живая, не-решёточная расстановка.")]
+    [SerializeField] private float slotJitter = 0.2f;
+
+    [Range(0f, 25f)]
+    [Tooltip("Случайный сдвиг facingDir (градусы, симметричный). 0 = взгляд строго по оси cover-блока. ~10° = живой взгляд.")]
+    [SerializeField] private float facingYawJitter = 8f;
 
     void BuildTacticalSlots()
     {
@@ -30,15 +40,13 @@ public partial class MapGenerator
         MapManager mapManager = MapManager.Instance;
         if (mapManager == null) return;
 
-        // Сначала на всякий случай чистим: при R-регенерации зоны пересоздаются с нуля,
+        // На всякий случай чистим: при R-регенерации зоны пересоздаются с нуля,
         // но если когда-то понадобится повторный вызов на той же сцене — будет безопасно.
         foreach (MapZoneComponent zone in mapManager.Zones)
         {
             if (zone != null) zone.ClearTacticalSlots();
         }
 
-        // Индекс "клетка → зона". Дешевле, чем для каждой клетки гонять Contains по boxColliders.
-        // Заполняем за один проход всех зарегистрированных зон.
         MapZoneComponent[,] cellToZone = BuildCellToZoneIndex(mapManager);
 
         for (int x = 0; x < width; x++)
@@ -55,7 +63,6 @@ public partial class MapGenerator
 
                 // Считаем cover/wall в 4-окрестности и копим нормаль facingDir.
                 int coverScore = 0;
-                Vector2Int normal = Vector2Int.zero;
                 Vector2Int coverNormal = Vector2Int.zero;
                 int coverNeighbours = 0;
 
@@ -79,9 +86,15 @@ public partial class MapGenerator
                 }
 
                 if (coverNeighbours == 0) continue; // только стен мало, нужен реальный cover-блок рядом
-                if (normal == Vector2Int.zero) normal = coverNormal;
 
-                Vector3 worldPos = new Vector3(x * blockSize, 0f, z * blockSize);
+                // Базовая позиция = центр клетки. Добавляем независимый джиттер по X и Z
+                // в пределах ±slotJitter*blockSize — этого достаточно, чтобы убрать
+                // визуальный эффект "решётки" без сложной геометрии прижатия к cover-у.
+                Vector3 cellWorld = new Vector3(x * blockSize, 0f, z * blockSize);
+                float jx = (Random.value - 0.5f) * 2f * slotJitter * blockSize;
+                float jz = (Random.value - 0.5f) * 2f * slotJitter * blockSize;
+                Vector3 worldPos = cellWorld + new Vector3(jx, 0f, jz);
+
                 Vector3 facing = ComputeFacingDir(coverNormal, x, z, zone);
 
                 TacticalSlot slot = new TacticalSlot
@@ -119,6 +132,8 @@ public partial class MapGenerator
     // открытое пространство). На случай если вектор оказался нулевым (например, ковры
     // окружили со всех сторон, что для нас геометрически почти невозможно), фоллбэк —
     // в сторону центра зоны: лучше так, чем NaN-направление.
+    // Дополнительно крутим на случайный yaw в пределах facingYawJitter — чтобы 100 слотов
+    // не смотрели в одну и ту же сторону строго по оси.
     Vector3 ComputeFacingDir(Vector2Int coverNormalCells, int x, int z, MapZoneComponent zone)
     {
         Vector3 dir = new Vector3(coverNormalCells.x, 0f, coverNormalCells.y);
@@ -129,8 +144,16 @@ public partial class MapGenerator
             dir.y = 0f;
         }
         if (dir.sqrMagnitude < 0.001f)
-            return Vector3.forward;
-        return dir.normalized;
+            dir = Vector3.forward;
+        dir.Normalize();
+
+        if (facingYawJitter > 0.01f)
+        {
+            float yaw = (Random.value - 0.5f) * 2f * facingYawJitter;
+            dir = Quaternion.Euler(0f, yaw, 0f) * dir;
+        }
+
+        return dir;
     }
 
     // Индекс клетка→зона. Для каждой зарегистрированной MapZoneComponent проверяем
@@ -145,7 +168,6 @@ public partial class MapGenerator
             foreach (BoxCollider col in zone.BoxColliders)
             {
                 if (col == null) continue;
-                // bounds считаем один раз для коллайдера.
                 Bounds b = col.bounds;
                 int xMin = Mathf.Max(0, Mathf.FloorToInt(b.min.x / blockSize));
                 int xMax = Mathf.Min(width - 1, Mathf.CeilToInt(b.max.x / blockSize));
