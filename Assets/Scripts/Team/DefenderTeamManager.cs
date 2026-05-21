@@ -77,7 +77,20 @@ public class DefenderTeamManager : TeamManager
         if (index < 0 || index >= Bots.Count) return;
         BotComponent bot = Bots[index];
         if (bot == null) return;
-        bot.AssignRole(role, zone);
+
+        // Сначала роль (она задаёт скорость и т.п.), потом — попытка занять тактический слот
+        // в зоне. Если слотов нет (этап C не нагенерил из-за отсутствия коверов) — фоллбэк
+        // на стандартный MoveToZone внутри AssignRole.
+        bot.AssignRole(role, zone: null);
+        if (zone != null && role == BotRole.Defender)
+        {
+            if (!bot.TryMoveToTacticalSlot(zone, TacticalSlotKind.HoldDefender))
+                bot.MoveToZone(zone);
+        }
+        else if (zone != null)
+        {
+            bot.MoveToZone(zone);
+        }
     }
 
     private void TryRepositionDefenders(int start, int end, MapZoneComponent siteZone)
@@ -89,10 +102,20 @@ public class DefenderTeamManager : TeamManager
             if (bot == null) continue;
 
             var chance = Random.Range(0, 4);
+            MapZoneComponent road = null;
             if (chance is 0 or 1)
-                bot.MoveToZone(FindPreferredRoad(siteZone, RoadType.Main));
+                road = FindPreferredRoad(siteZone, RoadType.Main);
             else if (chance == 2)
-                bot.MoveToZone(FindPreferredRoad(siteZone, RoadType.Link));
+                road = FindPreferredRoad(siteZone, RoadType.Link);
+            if (road == null) continue;
+
+            // На дороге защитник тоже хочет hold-angle (у стены/cover, смотрит вглубь).
+            // Семантически это HoldDefender; но генератор слотов кладёт на дорогах PeekAttacker.
+            // Пробуем сначала HoldDefender (вдруг кусок дороги пересекается с зоной с Hold-слотами),
+            // потом PeekAttacker (это и есть наш кейс), потом фоллбэк на случайную точку.
+            if (bot.TryMoveToTacticalSlot(road, TacticalSlotKind.HoldDefender)) continue;
+            if (bot.TryMoveToTacticalSlot(road, TacticalSlotKind.PeekAttacker)) continue;
+            bot.MoveToZone(road);
         }
     }
 

@@ -36,8 +36,10 @@ public class BotComponent : MonoBehaviour
     [Header("Бой — реакция и темп стрельбы")]
     [SerializeField, Min(0f), Tooltip("Задержка между выстрелами (сек). Имитирует реакцию + время прицеливания.")]
     private float reactionTime = 0.3f;
-    [SerializeField, Range(0f, 1f), Tooltip("Базовая вероятность попадания при идеальных условиях. Этап B заменит её на модель с учётом дистанции/укрытий.")]
-    private float chanceToShoot = 0.5f;
+
+    [Header("Модель попадания (HitModel)")]
+    [SerializeField, Tooltip("Параметры расчёта p_hit: база, фолл-офф по дистанции, штрафы за укрытие/движение цели, множители по ролям. На этапе E переедут в BotProfile SO.")]
+    private HitModelConfig hitModel = new HitModelConfig();
 
     [Header("Бой — здоровье и урон")]
     [SerializeField, Min(1), Tooltip("Здоровье бота. При hp ≤ 0 — Die(). Несколько выстрелов вместо мгновенной смерти убирает one-shot и делает бой более реалистичным.")]
@@ -69,9 +71,16 @@ public class BotComponent : MonoBehaviour
     private BotComponent _target;
     private float _currentReactionTime;
     private MapZoneComponent _currentZone;
+    // Текущий тактический слот (этап C). Null = бот идёт в случайную точку зоны
+    // (старое поведение, фоллбэк, когда у зоны нет слотов или нет свободных).
+    private TacticalSlot _currentSlot;
     private int _currentHealth;
     private float _idleTimer;
     private float _nextRepositionAt;
+    // Кэшируем MapGenerator один раз: он не пересоздаётся в рантайме (R-регенерация
+    // оставляет тот же компонент, меняется только содержимое). FindObjectOfType в Update
+    // был бы дорогим.
+    private static MapGenerator _cachedMap;
 
     public BotRole Role
     {
@@ -139,6 +148,7 @@ public class BotComponent : MonoBehaviour
             // Не в бою: копим idleTimer и периодически меняем точку внутри текущей зоны,
             // чтобы боты не "застывали" в одной случайной точке после первого MoveToZone.
             _currentReactionTime = 0f;
+            HandleIdleFacing();
             HandleIdleReposition();
         }
     }
@@ -202,11 +212,50 @@ public class BotComponent : MonoBehaviour
 
     public void MoveToZone(MapZoneComponent zone)
     {
+        // Смена зоны: освобождаем тактический слот в старой зоне, чтобы он не блокировался
+        // на следующий матч / соседей.
+        ReleaseCurrentSlot();
         _currentZone = zone;
         if (zone == null || agent == null || !agent.isOnNavMesh) return;
         agent.SetDestination(zone.GetRandomPointInZone());
         ScheduleNextReposition();
         _idleTimer = 0f;
+    }
+
+    /// <summary>
+    /// Пытается забронировать в указанной зоне тактический слот данного типа и поехать к нему.
+    /// Возвращает true, если слот найден и команда на движение отдана. False — бот не сдвинулся
+    /// (caller должен сделать фоллбэк, например <see cref="MoveToZone"/>). Этап C.
+    /// </summary>
+    public bool TryMoveToTacticalSlot(MapZoneComponent zone, TacticalSlotKind kind)
+    {
+        if (zone == null || agent == null || !agent.isOnNavMesh) return false;
+
+        TacticalSlot slot = zone.TryAcquireSlot(kind, this);
+        if (slot == null) return false;
+
+        ReleaseCurrentSlotExcept(zone); // если был слот в другой зоне — отпускаем
+        _currentZone = zone;
+        _currentSlot = slot;
+        agent.SetDestination(slot.worldPos);
+        ScheduleNextReposition();
+        _idleTimer = 0f;
+        return true;
+    }
+
+    private void ReleaseCurrentSlot()
+    {
+        if (_currentSlot == null) return;
+        if (_currentZone != null) _currentZone.ReleaseSlotOf(this);
+        _currentSlot = null;
+    }
+
+    private void ReleaseCurrentSlotExcept(MapZoneComponent newZone)
+    {
+        if (_currentSlot == null) return;
+        if (_currentZone != null && _currentZone != newZone)
+            _currentZone.ReleaseSlotOf(this);
+        _currentSlot = null;
     }
 
     public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
@@ -232,12 +281,47 @@ public class BotComponent : MonoBehaviour
             return;
         }
 
-        if (Random.value > chanceToShoot) return;
+        float pHit = ComputeHitChanceAgainst(_target);
+        if (Random.value > pHit) return;
 
         BotComponent victim = _target;
         victim.ReceiveDamage(damagePerShot);
         // Цель не обнуляем — если жертва ещё жива, продолжаем стрелять по ней в следующих тиках.
         if (victim == null) _target = null;
+    }
+
+    // Собирает ShotContext (дистанция в неявном виде через позиции, скорость цели через её
+    // NavMeshAgent, признак "цель в укрытии" — через MapGenerator) и зовёт HitModel.
+    // Вынесено отдельно, чтобы можно было дёшево залогировать/протестировать.
+    private float ComputeHitChanceAgainst(BotComponent target)
+    {
+        if (target == null) return 0f;
+
+        float targetSpeed = 0f;
+        if (target.agent != null && target.agent.isOnNavMesh)
+            targetSpeed = target.agent.velocity.magnitude;
+
+        var map = ResolveMapGenerator();
+        bool inCover = HitModel.IsTargetUsingCover(transform.position, target.transform.position, map);
+
+        var ctx = new HitModel.ShotContext
+        {
+            ShooterPos    = transform.position,
+            TargetPos     = target.transform.position,
+            ShooterRole   = role,
+            TargetSpeed   = targetSpeed,
+            TargetInCover = inCover,
+        };
+        return HitModel.ComputeHitChance(ctx, hitModel);
+    }
+
+    private static MapGenerator ResolveMapGenerator()
+    {
+        if (_cachedMap != null) return _cachedMap;
+        // FindObjectOfType зовётся один раз за сессию. Если карта перегенерируется,
+        // компонент тот же (R-регенерация делает Destroy children, не сам MapGenerator).
+        _cachedMap = UnityEngine.Object.FindFirstObjectByType<MapGenerator>();
+        return _cachedMap;
     }
 
     // Внешний API: чтобы Этап B (HitModel) мог наносить рассчитанный урон, минуя дефолтный путь.
@@ -283,7 +367,40 @@ public class BotComponent : MonoBehaviour
 
         _idleTimer = 0f;
         ScheduleNextReposition();
+
+        // Если есть свободный слот того же типа в этой же зоне — пересаживаемся в него
+        // (детерминированный выбор по TryAcquireSlot). Это даёт защитнику "ротацию углов",
+        // а атакеру — смену peek-позиции, не сваливаясь в чистый рандом.
+        if (_currentSlot != null)
+        {
+            TacticalSlotKind kind = _currentSlot.kind;
+            ReleaseCurrentSlot();
+            TacticalSlot next = _currentZone.TryAcquireSlot(kind, this);
+            if (next != null)
+            {
+                _currentSlot = next;
+                agent.SetDestination(next.worldPos);
+                return;
+            }
+        }
+
         agent.SetDestination(_currentZone.GetRandomPointInZone());
+    }
+
+    // Когда бот стоит на тактическом слоте и не в бою — медленно доворачиваемся в facingDir
+    // слота, чтобы "держать угол". Без этого бот пришёл бы в hold-spot и смотрел в случайную
+    // сторону, что выглядело бы плохо и убивало смысл слота.
+    private void HandleIdleFacing()
+    {
+        if (_currentSlot == null) return;
+        if (!IsOnPosition) return;
+
+        Vector3 dir = _currentSlot.facingDir;
+        dir.y = 0f;
+        if (dir.sqrMagnitude < 0.0001f) return;
+
+        Quaternion desired = Quaternion.LookRotation(dir);
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, desired, aimTurnSpeed * Time.deltaTime);
     }
 
     private void ScheduleNextReposition()
@@ -295,6 +412,9 @@ public class BotComponent : MonoBehaviour
 
     private void Die()
     {
+        // Освобождаем тактический слот, чтобы следующий товарищ мог его занять.
+        ReleaseCurrentSlot();
+
         // Уведомляем оппонента/свою команду — но безопасно: к этому моменту
         // MatchManager мог уже начать DestroyTeams, и любая ссылка может оказаться Unity-null.
         TeamManager team = _teamManager;

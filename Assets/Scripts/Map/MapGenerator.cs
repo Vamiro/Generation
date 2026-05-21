@@ -146,6 +146,19 @@ public partial class MapGenerator : MonoBehaviour
         if (coverOccupancy == null || !IsInsideMap(x, z)) return false;
         return coverOccupancy[x, z];
     }
+
+    // Размер клетки в мировых координатах. Нужен снаружи (HitModel) для пересчёта world → cell.
+    public float BlockSize => blockSize;
+
+    // Является ли клетка стеной (или вне карты — тоже считаем стеной, чтобы укрытие на краю
+    // карты работало корректно). Используется HitModel.IsTargetUsingCover для проверки
+    // соседей цели: даёт ли стена/край карты сбоку защиту от выстрела.
+    public bool IsCellWall(int x, int z)
+    {
+        if (cellTypes == null) return false;
+        if (!IsInsideMap(x, z)) return true;
+        return cellTypes[x, z] == BlockType.Wall;
+    }
     // Пути main-дорог (заполняется в BuildMainRoutes, читается в PlaceRooms).
     private List<List<Vector2Int>> mainRoadPaths = new();
     // Пути main-дорог по команде — нужны для ответвления Link.
@@ -299,6 +312,10 @@ public partial class MapGenerator : MonoBehaviour
             // После расстановки укрытий пересобираем samplePoints зон, чтобы боты
             // (особенно в SpawnZone) не получили стартовую/случайную точку прямо в укрытии.
             RefreshZoneSamplePointsAfterCovers();
+            // Tactical slots строятся ПОСЛЕ ковров: позиции Hold/Peek привязаны
+            // к coverOccupancy. Без коверов слотов не будет — бот фоллбэкается
+            // на старый GetRandomPointInZone.
+            BuildTacticalSlots();
         }
 
         // Финальный шаг: запекаем NavMesh по геометрии. Делается ПОСЛЕ ВСЕХ stage-ов,

@@ -20,6 +20,12 @@ public class MapZoneComponent : MonoBehaviour
     [SerializeField] private List<BoxCollider> boxColliders = new();
     public IReadOnlyList<BoxCollider> BoxColliders => boxColliders;
 
+    // Tactical slots генерируются MapGenerator.TacticalSlots после PlaceCovers.
+    // Хранятся прямо в зоне, чтобы бот мог запросить "дай Hold-слот этого сайта".
+    // Не [SerializeField]: пересоздаются при каждой генерации карты, в сцену сохранять не нужно.
+    private readonly List<TacticalSlot> tacticalSlots = new();
+    public IReadOnlyList<TacticalSlot> TacticalSlots => tacticalSlots;
+
     private List<Vector3> samplePoints = new();
 
     public void InitializeZone(int zoneId, IEnumerable<BoxCollider> colliders)
@@ -82,6 +88,71 @@ public class MapZoneComponent : MonoBehaviour
             bounds.center.y,
             Random.Range(bounds.min.z, bounds.max.z)
         );
+    }
+
+    // ─────────────────── Tactical slots API ───────────────────
+
+    public void AddTacticalSlot(TacticalSlot slot)
+    {
+        if (slot == null) return;
+        tacticalSlots.Add(slot);
+    }
+
+    public void ClearTacticalSlots()
+    {
+        tacticalSlots.Clear();
+    }
+
+    /// <summary>
+    /// Берёт ближайший к requester-у свободный слот указанного типа и бронирует его.
+    /// Если у requester-а уже забронирован слот в этой зоне — сначала освобождает.
+    /// Возвращает null, если свободных слотов нужного типа нет.
+    /// Детерминированно: при равных дистанциях выбирается слот с минимальным
+    /// (worldPos.x, worldPos.z). От Random не зависит — воспроизводимость сохраняется.
+    /// </summary>
+    public TacticalSlot TryAcquireSlot(TacticalSlotKind kind, BotComponent requester)
+    {
+        if (requester == null) return null;
+
+        ReleaseSlotOf(requester);
+
+        Vector3 from = requester.transform.position;
+        TacticalSlot best = null;
+        float bestSqr = float.PositiveInfinity;
+        for (int i = 0; i < tacticalSlots.Count; i++)
+        {
+            TacticalSlot s = tacticalSlots[i];
+            if (s.kind != kind || !s.IsFree) continue;
+
+            float sqr = (s.worldPos - from).sqrMagnitude;
+            if (sqr < bestSqr || (sqr == bestSqr && (best == null || CompareSlotsByPosition(s, best) < 0)))
+            {
+                bestSqr = sqr;
+                best = s;
+            }
+        }
+
+        if (best != null)
+            best.occupant = requester;
+        return best;
+    }
+
+    public void ReleaseSlotOf(BotComponent requester)
+    {
+        if (requester == null) return;
+        for (int i = 0; i < tacticalSlots.Count; i++)
+        {
+            if (tacticalSlots[i].occupant == requester)
+                tacticalSlots[i].occupant = null;
+        }
+    }
+
+    // Стабильный порядок: сначала по x, потом по z. Не зависит от Random.
+    private static int CompareSlotsByPosition(TacticalSlot a, TacticalSlot b)
+    {
+        int cmp = a.worldPos.x.CompareTo(b.worldPos.x);
+        if (cmp != 0) return cmp;
+        return a.worldPos.z.CompareTo(b.worldPos.z);
     }
 
     private BoxCollider PickColliderWeightedByVolume()

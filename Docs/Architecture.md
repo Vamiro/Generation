@@ -80,16 +80,19 @@ Assets/Scripts/
 │   ├── MapGenerator.Validation.cs     ★ partial: проверки достижимости (BFS)
 │   ├── MapGenerator.Rooms.cs          ★ partial: PlaceRooms() — галереи вдоль main-дорог  ← NEW
 │   ├── MapGenerator.NavMesh.cs        ★ partial: RebuildNavMesh() — runtime-бейк на Geometry  ← NEW
-│   ├── MapGenerator.Covers.cs         ★ partial: расстановка укрытий (отключена, в работе)
+│   ├── MapGenerator.Covers.cs         ★ partial: расстановка укрытий
+│   ├── MapGenerator.TacticalSlots.cs  ★ partial: Hold/Peek-точки рядом с cover-блоками  ← NEW (Этап C)
+│   ├── TacticalSlot.cs                — POCO: позиция + facingDir + тип + occupant (бронь)  ← NEW (Этап C)
 │   └── Zones/
 │       ├── SpawnZoneComponent.cs      — пустой маркер
 │       ├── SiteZoneComponent.cs       — пустой маркер
 │       ├── NeutralZoneComponent.cs    — пустой маркер
-│       ├── RoomZoneComponent.cs       — пустой маркер (галереи)  ← NEW
+│       ├── RoomZoneComponent.cs       — пустой маркер (галереи)
 │       └── RoadZoneComponent.cs       — roadType (Main/Link), roadToSite
 │
 ├── Bot/
-│   └── BotComponent.cs          — NavMeshAgent, простая стрельба по LOS, AssignRole, Die
+│   ├── BotComponent.cs          — NavMeshAgent, HP, ручное прицеливание, scoring цели, TacticalSlot
+│   └── HitModel.cs              — параметрическая модель попадания (Этап B)
 │
 ├── Team/
 │   ├── TeamManager.cs           — базовый класс команды (boss bot list + ссылка на OtherTeam)
@@ -182,7 +185,11 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
 [9.5] RefreshZoneSamplePointsAfterCovers — пересобирает samplePoints зарегистрированных
                                        MapZoneComponent-ов, исключая клетки с укрытиями
                                        (чтобы боты не спавнились внутри блока укрытия).
-[10] RebuildNavMesh                  — runtime-бейк NavMeshSurface на Geometry/  ← NEW
+[9.6] BuildTacticalSlots             — для каждой клетки-зоны, соседней с cover-блоком,
+                                       создаёт TacticalSlot (HoldDefender в Site/Neutral/Room,
+                                       PeekAttacker в Main/Link). Слоты складываются
+                                       в MapZoneComponent.TacticalSlots той зоны.  ← NEW (Этап C)
+[10] RebuildNavMesh                  — runtime-бейк NavMeshSurface на Geometry/
 ```
 
 **Иерархия объектов карты (children генератора):**
@@ -365,7 +372,8 @@ A* с учётом штрафов и предпочтений.
 Атрибуты:
 - `NavMeshAgent` для передвижения. В `Awake` ставится `agent.updateRotation = false` — поворот контролирует сам бот, чтобы "целиться" в неподвижного врага даже после остановки агента.
 - `role` (Attacker / Defender / Flanker / Scout).
-- **Бой — реакция и темп:** `reactionTime`, `chanceToShoot` (база).
+- **Бой — реакция и темп:** `reactionTime`.
+- **Бой — модель попадания (`HitModelConfig`):** см. ниже, отдельный подраздел.
 - **Бой — HP:** `maxHealth`, `damagePerShot`. Один выстрел больше **не** = смерть — это убирает one-shot и делает бой менее случайным.
 - **Прицеливание:** `aimTurnSpeed` (град/сек), `aimAngleTolerance` (град) — стрельба разрешена только если ствол смотрит на цель в пределах допуска.
 - **Выбор цели:** `sightRange`, `distancePriorityWeight`, `threatPriorityBonus`.
@@ -384,11 +392,39 @@ A* с учётом штрафов и предпочтений.
 - Все случайности (`Random.value` в `Shoot()`, jitter в `ScheduleNextReposition`) используют `UnityEngine.Random` — попадают под `Random.InitState(currentGenerationSeed)`, выставленный `MapGenerator`-ом.
 - Скоринг цели детерминирован при равных входах (нет `Random` в `PickBestTarget`).
 
-**Текущие ограничения (этапы B–F дорожной карты):**
-- `chanceToShoot` — пока константа, не зависит от дистанции/укрытия/движения цели (этап B: `HitModel`).
+### 5.1. HitModel (этап B плана переработки ботов)
+
+Файл: `Assets/Scripts/Bot/HitModel.cs`. Статический класс + `[Serializable]` `HitModelConfig` (хранится в `BotComponent` как `[SerializeField]`, в инспекторе показывается раскрывающейся группой; на этапе E переедет в `BotProfile` SO без переписывания).
+
+**Формула:**
+
+```
+p_hit = baseAccuracy
+      * roleMultiplier[shooter.role]
+      * distanceFalloff(dist)
+      * (targetInCover ? 1 - targetCoverPenalty : 1)
+      * (targetSpeed > movingSpeedThreshold ? 1 - targetMovingPenalty : 1)
+```
+
+- `distanceFalloff` — линейный: 1.0 до `fullAccuracyRange` (по умолчанию 8 м), затем линейно убывает до `minAccuracyAtMaxRange` (0.25) на `maxRange` (40 м); за `maxRange` остаётся минимум (не уходим в 0 — длинные перестрелки возможны, но маловероятны).
+- **Дефолты подобраны так, чтобы на ~10 м без укрытия / неподвижной цели результат ≈ 0.5** — это сохраняет балансировку матчей, бывшую при старом `chanceToShoot = 0.5`, до тех пор пока пользователь не начнёт настраивать профиль.
+- Все коэффициенты — `[Range]`/`[Min]` с русскими `[Tooltip]`.
+- `ComputeHitChance` **не** вызывает `Random` (детерминированно). Сам бросок «попал/нет» делает `BotComponent.Shoot` через `UnityEngine.Random.value` — попадает под `Random.InitState(currentGenerationSeed)` от `MapGenerator`.
+
+**Признак «цель в укрытии»** (`HitModel.IsTargetUsingCover`):
+- World → cell через `MapGenerator.BlockSize`.
+- Проверяем 4 соседние клетки цели; если хотя бы одна — `Wall` (`MapGenerator.IsCellWall`) или `Cover` (`MapGenerator.IsCellOccupiedByCover`), цель считается «приникнувшей».
+- **Сторона со стороны стрелка исключается** — иначе укрытие за спиной у цели «защищает от выстрела в лицо». Это и формализует валорантовское «hugging the wall».
+- Никаких новых тегов/слоёв на префабах не требуется — модель работает по сеточным данным `MapGenerator`.
+
+**Доступ к карте из бота:**
+- `MapGenerator` — не singleton; `BotComponent.ResolveMapGenerator` лениво кэширует ссылку через `FindFirstObjectByType` (один раз за сессию). Перегенерация карты (R) пересоздаёт содержимое того же компонента, ссылку не инвалидирует.
+- На `MapGenerator` добавлены публичные `BlockSize`, `IsCellWall(int x, int z)` рядом с уже существовавшим `IsCellOccupiedByCover`.
+
+**Текущие ограничения (этапы C–F дорожной карты):**
 - Нет тактических слотов в зоне — `repositionDelay` гоняет бота по случайным точкам в `GetRandomPointInZone()` (этап C: `TacticalSlot`).
 - Нет событийной шины (защитник не реагирует на "пуш атакеров", пока кто-то не умрёт) — этап D.
-- Параметры пока в полях `BotComponent`, а не в `BotProfile` SO — этап E.
+- Параметры пока в полях `BotComponent` / `HitModelConfig`, а не в `BotProfile` SO — этап E.
 
 ---
 
@@ -563,7 +599,7 @@ MonoSingleton, отвечает за сбор/агрегацию/отображ�
 | Карты слишком однообразны | весь Layout | расширить пространство параметров |
 | Нет batch-симуляций | `MatchManager` гоняет серию матчей (`maxMatches`) + headless-режим, `MatchStatsCollector` пишет per-match метрики в Storage. Не хватает только runner-а по списку карт (param sweep). | Этап 5 roadmap |
 | Метрики только смерти + per-match агрегаты | `DeathData` (координаты) + `StatsData` (исход, длительность, kill-zones) | следующий шаг — kill-heatmap из StatsData |
-| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этап A переработки ботов (HP, поворот к цели, scoring цели, reposition tick) — **выполнен**, см. раздел 5. |
+| Нет автокалибровки ботов | `BotComponent` | Этап 6 roadmap. Этапы A (HP, поворот, scoring, reposition) и B (HitModel: точность от дистанции/укрытия/движения) — **выполнены**, см. раздел 5 / 5.1. |
 | Не сохраняются параметры карты | — | нужен `MapGenerationProfile` ScriptableObject (Этап 4) |
 
 ---
