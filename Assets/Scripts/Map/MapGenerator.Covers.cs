@@ -2,6 +2,14 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [System.Flags]
+public enum CoverPlacementMode
+{
+    None = 0,
+    Prefabs = 1 << 0,
+    WeightLabels = 1 << 1,
+}
+
+[System.Flags]
 public enum CoverableZones
 {
     None    = 0,
@@ -19,509 +27,817 @@ public enum CoverableZones
 
 public partial class MapGenerator
 {
-    // ─────────────────────────────────────────────────────────────────────────
-    // Два независимых алгоритма:
-    //  А) Зонные укрытия (Site/Neutral/Room/Spawn): вес = видимость из входов, итерация.
-    //  Б) Дорожные укрытия (Main/Link): 0-1 cover на путь, строго у стены, в середине.
-    //     Никогда не блокирует выходы на зоны — концы путей исключены из кандидатов.
-    // ─────────────────────────────────────────────────────────────────────────
+    private const int EntrancePassageWindowRadius = 1; // 3×3 вокруг клетки входа
+    private const int WeightRayDirectionCount = 4;
+
+    private static readonly int[] WeightRayDx = { 1, -1, 0, 0 };
+    private static readonly int[] WeightRayDz = { 0, 0, 1, -1 };
+    private static readonly Color WeightLabelColorLow = new(0.15f, 1f, 0.2f, 1f);
+    private static readonly Color WeightLabelColorHigh = Color.red;
+
+    bool UsesCoverPrefabs =>
+        enableCovers && (coverPlacementMode & CoverPlacementMode.Prefabs) != 0 && coverPrefab != null;
+
+    bool UsesWeightLabels =>
+        enableCovers && (coverPlacementMode & CoverPlacementMode.WeightLabels) != 0;
 
     void PlaceCovers()
     {
-        if (coverPrefab == null)
+        if (!enableCovers || coverPlacementMode == CoverPlacementMode.None)
             return;
 
-        // Используем общее поле coverOccupancy (см. MapGenerator.cs) — после генерации
-        // оно остаётся доступным наружу через IsCellOccupiedByCover для других модулей
-        // (например, RuntimeZones исключает занятые клетки из samplePoints зоны).
-        bool[,] hasCover = coverOccupancy;
+        RecomputeCellWeightsFromRays();
 
-        // А) Зонные укрытия — через coverableZones.
-        TryPlaceCoversForZoneType(BlockType.Site,    wallOnlyMode: false, hasCover);
-        TryPlaceCoversForZoneType(BlockType.Neutral, wallOnlyMode: false, hasCover);
-        TryPlaceCoversForZoneType(BlockType.Spawn,   wallOnlyMode: false, hasCover);
-        TryPlaceCoversForZoneType(BlockType.Room,    wallOnlyMode: false, hasCover);
+        bool placePrefabs = UsesCoverPrefabs;
+        if (placePrefabs)
+        {
+            bool[,] hasCover = coverOccupancy;
+            TryPlaceCoversForZoneType(BlockType.Site, hasCover, cellWeights);
+            TryPlaceCoversForZoneType(BlockType.Neutral, hasCover, cellWeights);
+            PlaceAllRoadCovers(hasCover, cellWeights);
+        }
 
-        // Б) Дорожные укрытия — также управляются через coverableZones.
-        if ((coverableZones & CoverableZones.Main) != 0)
-            PlaceRoadCoversOnPaths(mainRoadPaths, BlockType.Main, hasCover);
-        if ((coverableZones & CoverableZones.Link) != 0)
-            PlaceRoadCoversOnPaths(linkPaths, BlockType.Link, hasCover);
+        if (UsesWeightLabels)
+        {
+            RecomputeCellWeightsFromRays();
+            VisualizeFloorWeightLabels();
+        }
     }
 
-    // ───── Б) Дорожные укрытия: wall-adjacent + экспозиция ───────────────────
-    //
-    //  1. Собрать wall-adjacent клетки в диапазоне [roadCoverRange] вдоль пути.
-    //  2. Отфильтровать по экспозиции: клетки ниже порога не нужны
-    //     (после поворота — и так прикрыто, cover не даёт тактического смысла).
-    //  3. Отсортировать по убыванию экспозиции — первыми ставить на самые открытые места.
-    //  4. Поставить roadCoversPerPath.Random() cover-ов с соблюдением spacing.
-    //
-    //  «У стены» = хотя бы один из 4 соседей — Wall/Empty/за краем карты.
-    //  На 1-клеточном коридоре ВСЕ клетки wall-adjacent (стены с обеих сторон) → работает.
-    //  На 2-клеточном — только крайние клетки → тоже корректно.
-    void PlaceRoadCoversOnPaths(List<List<Vector2Int>> paths, BlockType roadType, bool[,] hasCover)
+    readonly struct RoadWallRunCandidate
     {
-        if (paths == null) return;
+        public readonly Vector2Int Cell;
+        public readonly int RunLength;
+        public readonly int Weight;
 
-        int spacing = Mathf.Max(1, coverMinSpacing);
-        int minExp  = Mathf.Max(1, roadCoverMinExposure);
-        List<Vector2Int> placed = new(); // глобальный: spacing между путями
+        public RoadWallRunCandidate(Vector2Int cell, int runLength, int weight)
+        {
+            Cell = cell;
+            RunLength = runLength;
+            Weight = weight;
+        }
+    }
+
+    void PlaceAllRoadCovers(bool[,] hasCover, int[,] cellWeightGrid)
+    {
+        if (maxCoversOnRoads <= 0) return;
+
+        bool includeMain = (coverableZones & CoverableZones.Main) != 0;
+        bool includeLink = (coverableZones & CoverableZones.Link) != 0;
+        if (!includeMain && !includeLink) return;
+
+        int spacing = Mathf.Max(1, roadCoverMinSpacing);
+        var candidates = new List<RoadWallRunCandidate>();
+        if (includeMain)
+            CollectRoadWallRunCoverCandidates(mainRoadPaths, BlockType.Main, hasCover, cellWeightGrid, candidates);
+        if (includeLink)
+            CollectRoadWallRunCoverCandidates(linkPaths, BlockType.Link, hasCover, cellWeightGrid, candidates);
+
+        if (candidates.Count == 0)
+            return;
+
+        SortRoadWallRunCandidates(candidates, cellWeightGrid);
+
+        var placed = new List<Vector2Int>();
+        int placedCount = 0;
+        foreach (RoadWallRunCandidate candidate in candidates)
+        {
+            if (placedCount >= maxCoversOnRoads)
+                break;
+
+            Vector2Int cell = candidate.Cell;
+            if (hasCover[cell.x, cell.y])
+                continue;
+            if (HasCoverWithinSpacing(cell, placed, spacing))
+                continue;
+
+            PlaceCoverAt(cell);
+            hasCover[cell.x, cell.y] = true;
+            RecomputeCellWeightsFromRays();
+            placed.Add(cell);
+            placedCount++;
+        }
+    }
+
+    int GetPathBrushRadius(BlockType roadType) =>
+        Mathf.Max(0, roadType == BlockType.Main ? mainWidth : linkWidth);
+
+    void CollectRoadWallRunCoverCandidates(
+        List<List<Vector2Int>> paths,
+        BlockType roadType,
+        bool[,] hasCover,
+        int[,] cellWeightGrid,
+        List<RoadWallRunCandidate> candidates)
+    {
+        HashSet<Vector2Int> rangeCells = BuildRoadCoverRangeCells(paths, roadType);
+        if (rangeCells.Count == 0)
+            return;
+
+        int minRun = Mathf.Max(2, roadWallRunMinLength);
+        var bestByCell = new Dictionary<Vector2Int, RoadWallRunCandidate>();
+
+        CollectGridRoadWallRuns(roadType, hasCover, rangeCells, minRun, cellWeightGrid, bestByCell);
+        CollectHighWeightRoadWallFallback(roadType, hasCover, rangeCells, cellWeightGrid, bestByCell);
+
+        foreach (RoadWallRunCandidate candidate in bestByCell.Values)
+            candidates.Add(candidate);
+    }
+
+    HashSet<Vector2Int> BuildRoadCoverRangeCells(List<List<Vector2Int>> paths, BlockType roadType)
+    {
+        var rangeCells = new HashSet<Vector2Int>();
+        if (paths == null)
+            return rangeCells;
+
+        int brushRadius = GetPathBrushRadius(roadType);
 
         foreach (List<Vector2Int> path in paths)
         {
-            if (path == null || path.Count < 6) continue;
-            if (Random.value > Mathf.Clamp01(roadCoverChance)) continue;
+            if (path == null || path.Count < 2)
+                continue;
 
-            int idxStart = Mathf.CeilToInt (path.Count * roadCoverRange.min);
-            int idxEnd   = Mathf.FloorToInt(path.Count * roadCoverRange.max);
-            idxStart = Mathf.Clamp(idxStart, 1, path.Count - 2);
-            idxEnd   = Mathf.Clamp(idxEnd,   idxStart, path.Count - 2);
+            int idxStart = Mathf.CeilToInt(path.Count * roadCoverRange.min);
+            int idxEnd = Mathf.FloorToInt(path.Count * roadCoverRange.max);
+            idxStart = Mathf.Clamp(idxStart, 0, path.Count - 1);
+            idxEnd = Mathf.Clamp(idxEnd, idxStart, path.Count - 1);
 
-            // Кандидаты: клетки ВСЁ ЕЩЁ нужного типа дороги + wall-adjacent + достаточная экспозиция.
-            // Ключевой фикс: PlaceRooms() мог перекрасить часть клеток пути в Room/Wall —
-            // такие клетки из рассмотрения исключаем.
-            List<(Vector2Int cell, int exposure)> candidates = new();
             for (int i = idxStart; i <= idxEnd; i++)
             {
-                Vector2Int cell = path[i];
-                if (!IsInsideMap(cell.x, cell.y)) continue;
-                if (hasCover[cell.x, cell.y]) continue;
-
-                // Клетка должна оставаться нужным типом дороги — не перекрашенной в Room/Wall.
-                if (cellTypes[cell.x, cell.y] != roadType) continue;
-
-                if (!IsRoadWallAdjacent(cell)) continue;
-
-                int exp = ComputeRoadExposure(cell);
-                if (exp >= minExp)
-                    candidates.Add((cell, exp));
+                foreach (Vector2Int cell in EnumeratePathBrushCells(path[i], brushRadius))
+                {
+                    if (!IsInsideMap(cell.x, cell.y))
+                        continue;
+                    if (cellTypes[cell.x, cell.y] == roadType)
+                        rangeCells.Add(cell);
+                }
             }
+        }
 
-            if (candidates.Count == 0) continue;
+        return rangeCells;
+    }
 
-            // Сортируем: наиболее открытые — первыми.
-            candidates.Sort((a, b) => b.exposure.CompareTo(a.exposure));
+    IEnumerable<Vector2Int> EnumeratePathBrushCells(Vector2Int center, int brushRadius)
+    {
+        if (brushRadius <= 0)
+        {
+            yield return center;
+            yield break;
+        }
 
-            int count  = roadCoversPerPath.Random();
-            int placed_ = 0;
-            foreach (var (chosen, _) in candidates)
+        for (int dx = -brushRadius; dx <= brushRadius; dx++)
+        {
+            for (int dz = -brushRadius; dz <= brushRadius; dz++)
             {
-                if (placed_ >= count) break;
-                if (HasCoverWithinSpacing(chosen, placed, spacing)) continue;
-                PlaceCoverAt(chosen);
-                hasCover[chosen.x, chosen.y] = true;
-                placed.Add(chosen);
-                placed_++;
+                if (useCircularPathBrush && dx * dx + dz * dz > brushRadius * brushRadius)
+                    continue;
+
+                yield return new Vector2Int(center.x + dx, center.y + dz);
             }
         }
     }
 
-    // Экспозиция = максимальная дальность прямого обзора по 4 осям.
-    // ВАЖНО: луч идёт только по клеткам ТОГО ЖЕ типа дороги (Main по Main, Link по Link).
-    // Это означает:
-    //   - длинный прямой коридор → высокая экспозиция;
-    //   - клетка на повороте → луч быстро упирается → низкая;
-    //   - клетка у Room/Site → луч останавливается на границе → Room не «добавляет» экспозицию.
-    int ComputeRoadExposure(Vector2Int cell)
+    void CollectGridRoadWallRuns(
+        BlockType roadType,
+        bool[,] hasCover,
+        HashSet<Vector2Int> rangeCells,
+        int minRunLength,
+        int[,] cellWeightGrid,
+        Dictionary<Vector2Int, RoadWallRunCandidate> bestByCell)
     {
-        BlockType myType = cellTypes[cell.x, cell.y];
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
-        int maxSight = 0;
+        int[] wallDx = { 0, 1, 0, -1 };
+        int[] wallDz = { 1, 0, -1, 0 };
 
-        for (int dir = 0; dir < 4; dir++)
+        for (int x = 0; x < width; x++)
         {
-            int sight = 0;
-            int nx = cell.x + dx[dir];
-            int nz = cell.y + dz[dir];
-
-            while (IsInsideMap(nx, nz))
+            for (int z = 0; z < height; z++)
             {
-                if (cellTypes[nx, nz] != myType) break; // другой тип — стоп
-                sight++;
-                nx += dx[dir];
-                nz += dz[dir];
+                Vector2Int cell = new(x, z);
+                if (!rangeCells.Contains(cell))
+                    continue;
+
+                for (int wallDir = 0; wallDir < 4; wallDir++)
+                {
+                    int wdx = wallDx[wallDir];
+                    int wdz = wallDz[wallDir];
+                    if (!IsRoadWallHugCell(x, z, wdx, wdz, roadType, hasCover))
+                        continue;
+
+                    int runDx = wallDx[(wallDir + 1) % 4];
+                    int runDz = wallDz[(wallDir + 1) % 4];
+                    int prevX = x - runDx;
+                    int prevZ = z - runDz;
+                    if (IsInsideMap(prevX, prevZ)
+                        && IsRoadWallHugCell(prevX, prevZ, wdx, wdz, roadType, hasCover))
+                        continue;
+
+                    List<Vector2Int> run = BuildRoadWallRun(
+                        cell, runDx, runDz, wdx, wdz, roadType, hasCover, rangeCells);
+                    if (run.Count < minRunLength)
+                        continue;
+
+                    Vector2Int mid = run[run.Count / 2];
+                    RegisterRoadWallRunCandidate(bestByCell, mid, run.Count, cellWeightGrid);
+                }
             }
-
-            maxSight = Mathf.Max(maxSight, sight);
         }
-
-        return maxSight;
     }
 
-    // Клетка коридора у стены — имеет хотя бы одного соседа Wall/Empty/вне карты.
-    // Дополнительно: если сосед — Room, отклоняем: Room уже создаёт тактическое разнообразие
-    // на этом участке дороги, дублировать cover рядом не нужно.
-    bool IsRoadWallAdjacent(Vector2Int cell)
+    List<Vector2Int> BuildRoadWallRun(
+        Vector2Int start,
+        int runDx,
+        int runDz,
+        int wdx,
+        int wdz,
+        BlockType roadType,
+        bool[,] hasCover,
+        HashSet<Vector2Int> rangeCells)
     {
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
-        bool hasOuterWall = false;
+        var run = new List<Vector2Int> { start };
+        Vector2Int cur = start;
 
-        for (int i = 0; i < 4; i++)
+        while (true)
         {
-            int nx = cell.x + dx[i];
-            int nz = cell.y + dz[i];
+            Vector2Int next = new(cur.x + runDx, cur.y + runDz);
+            if (!rangeCells.Contains(next))
+                break;
+            if (!IsRoadWallHugCell(next.x, next.y, wdx, wdz, roadType, hasCover))
+                break;
 
-            if (!IsInsideMap(nx, nz))
-            {
-                hasOuterWall = true;
+            run.Add(next);
+            cur = next;
+        }
+
+        return run;
+    }
+
+    void CollectHighWeightRoadWallFallback(
+        BlockType roadType,
+        bool[,] hasCover,
+        HashSet<Vector2Int> rangeCells,
+        int[,] cellWeightGrid,
+        Dictionary<Vector2Int, RoadWallRunCandidate> bestByCell)
+    {
+        int[] wallDx = { 0, 1, 0, -1 };
+        int[] wallDz = { 1, 0, -1, 0 };
+
+        foreach (Vector2Int cell in rangeCells)
+        {
+            if (hasCover[cell.x, cell.y])
                 continue;
-            }
+            if (cellTypes[cell.x, cell.y] != roadType)
+                continue;
 
-            BlockType nt = cellTypes[nx, nz];
+            int weight = cellWeightGrid[cell.x, cell.y];
+            if (weight < coverMinOpenness)
+                continue;
 
-            if (nt == BlockType.Room || nt == BlockType.Pocket) return false;
-
-            if (nt == BlockType.Empty)
+            bool hugsWall = false;
+            for (int wallDir = 0; wallDir < 4; wallDir++)
             {
-                hasOuterWall = true;
+                if (!IsRoadWallHugCell(cell.x, cell.y, wallDx[wallDir], wallDz[wallDir], roadType, hasCover))
+                    continue;
+
+                hugsWall = true;
+                break;
             }
-            else if (nt == BlockType.Wall)
-            {
-                // Wall — хорошо, но только если это внешняя стена, а не обводка Room.
-                if (!IsRoomEnclosureWall(nx, nz))
-                    hasOuterWall = true;
-            }
+
+            if (!hugsWall)
+                continue;
+
+            RegisterRoadWallRunCandidate(bestByCell, cell, 0, cellWeightGrid);
         }
-
-        return hasOuterWall;
     }
 
-    // Wall-клетка является стеной обводки Room (от ShapeZoneEnclosures) если
-    // хотя бы один её 4-сосед — Room. Такие стены не должны привлекать road cover.
-    bool IsRoomEnclosureWall(int wx, int wz)
+    void RegisterRoadWallRunCandidate(
+        Dictionary<Vector2Int, RoadWallRunCandidate> bestByCell,
+        Vector2Int cell,
+        int runLength,
+        int[,] cellWeightGrid)
     {
+        int weight = cellWeightGrid[cell.x, cell.y];
+        var candidate = new RoadWallRunCandidate(cell, runLength, weight);
+
+        if (!bestByCell.TryGetValue(cell, out RoadWallRunCandidate existing))
+        {
+            bestByCell[cell] = candidate;
+            return;
+        }
+
+        if (candidate.RunLength > existing.RunLength
+            || (candidate.RunLength == existing.RunLength && candidate.Weight > existing.Weight))
+            bestByCell[cell] = candidate;
+    }
+
+    bool IsRoadWallHugCell(int x, int z, int wdx, int wdz, BlockType roadType, bool[,] hasCover)
+    {
+        if (!IsInsideMap(x, z))
+            return false;
+        if (cellTypes[x, z] != roadType)
+            return false;
+        if (hasCover[x, z])
+            return false;
+        if (!IsOutwardBlockingCell(x + wdx, z + wdz))
+            return false;
+
+        int runDx = wdz;
+        int runDz = -wdx;
+        return IsRoadCorridorPassable(x + runDx, z + runDz, hasCover)
+            || IsRoadCorridorPassable(x - runDx, z - runDz, hasCover);
+    }
+
+    bool IsRoadCorridorPassable(int x, int z, bool[,] hasCover)
+    {
+        if (!IsInsideMap(x, z))
+            return false;
+        if (hasCover[x, z])
+            return false;
+
+        return IsOutsideWalkableType(cellTypes[x, z]);
+    }
+
+    bool IsOutwardBlockingCell(int x, int z)
+    {
+        if (!IsInsideMap(x, z))
+            return true;
+
+        BlockType type = cellTypes[x, z];
+        return type is BlockType.Wall or BlockType.Empty;
+    }
+
+    void SortRoadWallRunCandidates(List<RoadWallRunCandidate> candidates, int[,] cellWeightGrid)
+    {
+        candidates.Sort((a, b) =>
+        {
+            if (a.RunLength != b.RunLength)
+                return b.RunLength.CompareTo(a.RunLength);
+
+            if (a.Weight != b.Weight)
+                return b.Weight.CompareTo(a.Weight);
+
+            if (a.Cell.x != b.Cell.x)
+                return a.Cell.x.CompareTo(b.Cell.x);
+
+            return a.Cell.y.CompareTo(b.Cell.y);
+        });
+
+        ApplyRunLengthTieShuffle(candidates);
+    }
+
+    void ApplyRunLengthTieShuffle(List<RoadWallRunCandidate> candidates)
+    {
+        float bias = Mathf.Clamp01(coverRandomBias);
+        if (bias <= 0f || candidates.Count < 2)
+            return;
+
+        int topRun = candidates[0].RunLength;
+        int tieCount = 1;
+        while (tieCount < candidates.Count && candidates[tieCount].RunLength == topRun)
+            tieCount++;
+
+        if (tieCount < 2)
+            return;
+
+        int shuffleCount = Mathf.Max(2, Mathf.RoundToInt(tieCount * bias));
+        shuffleCount = Mathf.Min(shuffleCount, tieCount);
+        ShuffleListRange(candidates, 0, shuffleCount);
+    }
+
+    void RecomputeCellWeightsFromRays()
+    {
+        for (int x = 0; x < width; x++)
+        {
+            for (int z = 0; z < height; z++)
+            {
+                int weight = ComputeCellWeightFromRays(x, z);
+                cellWeights[x, z] = weight;
+
+                BlockComponent floor = floorInstances[x, z];
+                if (floor != null)
+                    floor.weight = weight;
+            }
+        }
+    }
+
+    HashSet<Vector2Int> CollectAllEntranceBorderCells()
+    {
+        HashSet<Vector2Int> allEntrances = new();
+        CollectZoneEntranceCells(allEntrances, null);
+        return allEntrances;
+    }
+
+    // Клетки без меток веса: внутри зоны у выхода + Main/Link на входе в Site/Neutral/Spawn.
+    HashSet<Vector2Int> CollectWeightLabelHiddenCells()
+    {
+        HashSet<Vector2Int> hidden = new();
+        CollectZoneEntranceCells(hidden, hidden);
+        return hidden;
+    }
+
+    void CollectZoneEntranceCells(HashSet<Vector2Int> insideExits, HashSet<Vector2Int> roadEntrances)
+    {
+        BlockType[] zoneTypes =
+        {
+            BlockType.Site,
+            BlockType.Neutral,
+            BlockType.Spawn
+        };
+
         int[] dx = { 1, -1, 0, 0 };
         int[] dz = { 0, 0, 1, -1 };
-        for (int i = 0; i < 4; i++)
+
+        foreach (BlockType zoneType in zoneTypes)
         {
-            int nx = wx + dx[i];
-            int nz = wz + dz[i];
-            if (IsInsideMap(nx, nz) && cellTypes[nx, nz] == BlockType.Room) return true;
+            if (zoneType == BlockType.Neutral && !generateNeutralZone)
+                continue;
+
+            List<ZoneRegion> regions = ExtractRegionsForType(zoneType);
+            foreach (ZoneRegion region in regions)
+            {
+                HashSet<Vector2Int> regionSet = new(region.Cells.Count);
+                foreach (Vector2Int cell in region.Cells)
+                    regionSet.Add(cell);
+
+                if (insideExits != null)
+                {
+                    foreach (Vector2Int inside in CollectEntranceBorderCells(region, regionSet))
+                        insideExits.Add(inside);
+                }
+
+                if (roadEntrances == null)
+                    continue;
+
+                foreach (Vector2Int cell in region.Cells)
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        int nx = cell.x + dx[i];
+                        int nz = cell.y + dz[i];
+                        if (!IsInsideMap(nx, nz))
+                            continue;
+
+                        Vector2Int outside = new(nx, nz);
+                        if (regionSet.Contains(outside))
+                            continue;
+
+                        BlockType outsideType = cellTypes[nx, nz];
+                        if (outsideType is BlockType.Main or BlockType.Link)
+                            roadEntrances.Add(outside);
+                    }
+                }
+            }
         }
-        return false;
     }
 
-    void TryPlaceCoversForZoneType(BlockType zoneType, bool wallOnlyMode, bool[,] hasCover)
+    // Проходима для луча: пол/зона; стоп на Wall, Empty, край карты и уже поставленном укрытии.
+    bool IsWeightRayPassable(int x, int z)
     {
-        if (!IsZoneCoverable(zoneType)) return;
+        if (!IsInsideMap(x, z))
+            return false;
+
+        if (coverOccupancy != null && coverOccupancy[x, z])
+            return false;
+
+        BlockType type = cellTypes[x, z];
+        return type is not (BlockType.Wall or BlockType.Empty or BlockType.None);
+    }
+
+    // Число клеток, через которые прошёл луч в одну сторону, до первой стены.
+    int CastWeightRay(int x, int z, int dx, int dz)
+    {
+        int passed = 0;
+        int nx = x + dx;
+        int nz = z + dz;
+
+        while (IsWeightRayPassable(nx, nz))
+        {
+            passed++;
+            nx += dx;
+            nz += dz;
+        }
+
+        return passed;
+    }
+
+    int ComputeCellWeightFromRays(int x, int z)
+    {
+        if (!IsWeightRayPassable(x, z))
+            return 0;
+
+        int sum = 0;
+        for (int dir = 0; dir < WeightRayDirectionCount; dir++)
+            sum += CastWeightRay(x, z, WeightRayDx[dir], WeightRayDz[dir]);
+
+        return sum / WeightRayDirectionCount;
+    }
+
+    void TryPlaceCoversForZoneType(BlockType zoneType, bool[,] hasCover, int[,] cellWeightGrid)
+    {
+        if (!IsZoneCoverable(zoneType))
+            return;
+
+        int limit = zoneType == BlockType.Site ? maxCoversPerSite : maxCoversPerOtherZone;
+        if (limit <= 0)
+            return;
 
         List<ZoneRegion> regions = ExtractRegionsForType(zoneType);
         foreach (ZoneRegion region in regions)
-            PlaceCoversInRegion(region, wallOnlyMode, hasCover);
+            PlaceCoversInRegion(region, hasCover, cellWeightGrid, limit);
     }
 
     bool IsZoneCoverable(BlockType zoneType)
     {
         return zoneType switch
         {
-            BlockType.Site    => (coverableZones & CoverableZones.Site)    != 0,
+            BlockType.Site    => (coverableZones & CoverableZones.Site) != 0,
             BlockType.Neutral => (coverableZones & CoverableZones.Neutral) != 0 && generateNeutralZone,
-            BlockType.Spawn   => (coverableZones & CoverableZones.Spawn)   != 0,
-            BlockType.Room    => (coverableZones & CoverableZones.Room)    != 0,
+            BlockType.Spawn   => (coverableZones & CoverableZones.Spawn) != 0,
             _                 => false
         };
     }
 
-    // ───── Основной метод для одной зоны ─────────────────────────────────────
-
-    void PlaceCoversInRegion(ZoneRegion region, bool wallOnlyMode, bool[,] hasCover)
+    void PlaceCoversInRegion(ZoneRegion region, bool[,] hasCover, int[,] cellWeightGrid, int limit)
     {
-        if (region.Cells.Count < 4) return;
+        if (region.Cells.Count < 2 || limit <= 0)
+            return;
 
         HashSet<Vector2Int> regionSet = new(region.Cells.Count);
-        foreach (Vector2Int cell in region.Cells) regionSet.Add(cell);
+        foreach (Vector2Int cell in region.Cells)
+            regionSet.Add(cell);
 
-        // Входы зоны.
-        List<Vector2Int> entrances = CollectEntrancePoints(region, regionSet);
-        if (entrances.Count == 0) return;
-
-        HashSet<Vector2Int> forbidden = BuildEntranceForbidden(entrances, regionSet);
-
-        // Весовая карта. В wall-only режиме кандидатами могут быть только wall-adjacent клетки.
-        HashSet<Vector2Int> candidates = wallOnlyMode
-            ? BuildWallAdjacentCells(region, regionSet)
-            : regionSet;
-        if (candidates.Count == 0) return;
-
-        int[,] weight = BuildEntranceVisibilityWeights(regionSet, candidates, entrances, hasCover);
-
-        int hardLimit  = coverMaxPerZone > 0 ? coverMaxPerZone : int.MaxValue;
-        int fillLimit  = Mathf.FloorToInt(region.Cells.Count * Mathf.Clamp01(coverMaxFillRatio));
-        int limit      = Mathf.Min(hardLimit, fillLimit);
-        if (limit <= 0) return;
-
-        // Начальный максимум — порог остановки вычисляется от него.
-        int initialMaxWeight = FindMaxWeight(candidates, weight, hasCover);
-        if (initialMaxWeight <= 0) return;
-        int stopThreshold = Mathf.Max(1, Mathf.CeilToInt(initialMaxWeight * Mathf.Clamp01(coverStopFraction)));
-
-        int spacing = Mathf.Max(1, coverMinSpacing);
-        List<Vector2Int> placed = new();
+        List<Vector2Int> entranceCells = CollectEntranceBorderCells(region, regionSet);
+        Vector2 regionCentroid = ComputeRegionCentroid(region);
         int placedCount = 0;
 
         while (placedCount < limit)
         {
-            if (!TryFindBestCoverCell(candidates, weight, hasCover, forbidden, placed, spacing,
-                    out Vector2Int chosen, out int chosenWeight))
-                break;
-
-            // Два условия остановки:
-            //  1. Абсолютный порог (coverMinEntranceVisibility) — минимальная видимость.
-            //  2. Относительный порог (coverStopFraction) — когда основные "горячие точки" уже прикрыты.
-            if (chosenWeight < coverMinEntranceVisibility) break;
-            if (chosenWeight < stopThreshold) break;
-
-            // Поставить основной блок.
-            PlaceCoverAt(chosen);
-            hasCover[chosen.x, chosen.y] = true;
-            placed.Add(chosen);
-            weight[chosen.x, chosen.y] = 0;
-            placedCount++;
-
-            // Пересчитать веса после основного блока.
-            UpdateWeightsAfterCover(chosen, entrances, regionSet, hasCover, weight);
-
-            // Попробовать поставить второй блок (double cover).
-            if (placedCount < limit && TryPickDoubleCoverNeighbor(chosen, candidates, weight,
-                    hasCover, forbidden, placed, spacing, out Vector2Int neighbor))
-            {
-                PlaceCoverAt(neighbor);
-                hasCover[neighbor.x, neighbor.y] = true;
-                placed.Add(neighbor);
-                weight[neighbor.x, neighbor.y] = 0;
-                placedCount++;
-                UpdateWeightsAfterCover(neighbor, entrances, regionSet, hasCover, weight);
-            }
-        }
-    }
-
-    // ───── Двойной блок (double cover) ───────────────────────────────────────
-
-    // Проверяет, нужно ли ставить второй блок рядом с primary.
-    // Правило Valorant: в открытых местах — double/stack; у стен — обычно single.
-    bool TryPickDoubleCoverNeighbor(
-        Vector2Int primary,
-        HashSet<Vector2Int> candidates,
-        int[,] weight,
-        bool[,] hasCover,
-        HashSet<Vector2Int> forbidden,
-        List<Vector2Int> placed,
-        int spacing,
-        out Vector2Int neighbor)
-    {
-        neighbor = default;
-        float chance = coverMultiCellChance.Random();
-        if (Random.value >= chance) return false;
-
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
-
-        int bestWeight = 0; // минимальный вес соседа — хватит любого ненулевого
-        bool found = false;
-
-        for (int i = 0; i < 4; i++)
-        {
-            Vector2Int nb = new Vector2Int(primary.x + dx[i], primary.y + dz[i]);
-            if (!candidates.Contains(nb)) continue;
-            if (hasCover[nb.x, nb.y]) continue;
-            if (forbidden.Contains(nb)) continue;
-
-            // Для соседа проверяем spacing относительно ВСЕХ поставленных кроме primary.
-            bool tooClose = false;
-            for (int p = 0; p < placed.Count - 1; p++) // -1 потому что primary уже в placed
-            {
-                if (Mathf.Max(Mathf.Abs(nb.x - placed[p].x), Mathf.Abs(nb.y - placed[p].y)) < spacing - 1)
-                {
-                    tooClose = true;
-                    break;
-                }
-            }
-            if (tooClose) continue;
-
-            int w = weight[nb.x, nb.y];
-            if (w > bestWeight)
-            {
-                bestWeight = w;
-                neighbor = nb;
-                found = true;
-            }
-        }
-
-        return found;
-    }
-
-    // ───── Шаг 2: Начальная весовая карта ─────────────────────────────────────
-
-    int[,] BuildEntranceVisibilityWeights(
-        HashSet<Vector2Int> regionSet,
-        HashSet<Vector2Int> candidates,
-        List<Vector2Int> entrances,
-        bool[,] hasCover)
-    {
-        int[,] w = new int[width, height];
-
-        foreach (Vector2Int entrance in entrances)
-        {
-            foreach (Vector2Int cell in candidates)
+            int maxWeightInRegion = 0;
+            var candidates = new List<Vector2Int>();
+            foreach (Vector2Int cell in region.Cells)
             {
                 if (hasCover[cell.x, cell.y]) continue;
-                if (IsVisibleInRegion(entrance, cell, regionSet, hasCover))
-                    w[cell.x, cell.y]++;
+                if (entranceCells.Contains(cell)) continue;
+
+                int w = cellWeights[cell.x, cell.y];
+                if (w <= 0) continue;
+
+                maxWeightInRegion = Mathf.Max(maxWeightInRegion, w);
+                candidates.Add(cell);
             }
-        }
 
-        return w;
-    }
+            if (candidates.Count == 0)
+                break;
 
-    // ───── Wall-adjacent клетки (для дорог) ──────────────────────────────────
+            int effectiveMinOpen = Mathf.Max(1, Mathf.Min(coverMinOpenness, maxWeightInRegion));
+            candidates.RemoveAll(c => cellWeights[c.x, c.y] < effectiveMinOpen);
+            if (candidates.Count == 0)
+                break;
 
-    // Клетка коридора у стены = имеет соседа, который не является тем же типом зоны
-    // (Wall, Empty, другая зона). Такие клетки — единственные кандидаты для road cover.
-    HashSet<Vector2Int> BuildWallAdjacentCells(ZoneRegion region, HashSet<Vector2Int> regionSet)
-    {
-        HashSet<Vector2Int> wallAdjacent = new();
-        int[] dx = { 1, -1, 0, 0 };
-        int[] dz = { 0, 0, 1, -1 };
+            SortZoneCoverCandidates(candidates, cellWeights, regionCentroid);
 
-        foreach (Vector2Int cell in region.Cells)
-        {
-            for (int i = 0; i < 4; i++)
+            bool placedThisRound = false;
+            foreach (Vector2Int cell in candidates)
             {
-                int nx = cell.x + dx[i];
-                int nz = cell.y + dz[i];
-
-                // Сосед вне карты или не принадлежит тому же региону = мы у стены.
-                if (!IsInsideMap(nx, nz) || !regionSet.Contains(new Vector2Int(nx, nz)))
-                {
-                    wallAdjacent.Add(cell);
+                if (cellWeights[cell.x, cell.y] < effectiveMinOpen)
                     break;
-                }
+                if (!CanPlaceWithoutBlockingEntrances(cell, hasCover, regionSet, entranceCells))
+                    continue;
+
+                PlaceCoverAt(cell);
+                hasCover[cell.x, cell.y] = true;
+                RecomputeCellWeightsFromRays();
+                placedCount++;
+                placedThisRound = true;
+                break;
             }
-        }
 
-        return wallAdjacent;
+            if (!placedThisRound)
+                break;
+        }
     }
 
-    // ───── Поиск лучшей клетки ────────────────────────────────────────────────
-
-    int FindMaxWeight(HashSet<Vector2Int> candidates, int[,] weight, bool[,] hasCover)
-    {
-        int max = 0;
-        foreach (Vector2Int cell in candidates)
-        {
-            if (!hasCover[cell.x, cell.y] && weight[cell.x, cell.y] > max)
-                max = weight[cell.x, cell.y];
-        }
-        return max;
-    }
-
-    bool TryFindBestCoverCell(
-        HashSet<Vector2Int> candidates,
-        int[,] weight,
+    // Не ломаем проход: в каждом 3×3 вокруг клетки входа остаётся связность «снаружи ↔ внутри зоны».
+    bool CanPlaceWithoutBlockingEntrances(
+        Vector2Int candidate,
         bool[,] hasCover,
-        HashSet<Vector2Int> forbidden,
-        List<Vector2Int> placed,
-        int spacing,
-        out Vector2Int chosen,
-        out int chosenWeight)
+        HashSet<Vector2Int> regionSet,
+        List<Vector2Int> entranceCells)
     {
-        chosen = default;
-        chosenWeight = 0;
+        if (entranceCells.Count == 0)
+            return true;
 
-        float bestRanked = -1f;
-        bool found = false;
-
-        foreach (Vector2Int cell in candidates)
+        foreach (Vector2Int entrance in entranceCells)
         {
-            if (hasCover[cell.x, cell.y]) continue;
-            if (forbidden.Contains(cell)) continue;
+            if (ChebyshevDistance(candidate, entrance) > EntrancePassageWindowRadius)
+                continue;
 
-            int w = weight[cell.x, cell.y];
-            if (w <= 0) continue;
-
-            if (HasCoverWithinSpacing(cell, placed, spacing)) continue;
-
-            float ranked = w * (1f + Random.value * Mathf.Clamp01(coverRandomBias));
-            if (ranked > bestRanked)
-            {
-                bestRanked = ranked;
-                chosen = cell;
-                chosenWeight = w;
-                found = true;
-            }
+            if (!EntranceWindowHasPassage(entrance, regionSet, hasCover, candidate))
+                return false;
         }
 
-        return found;
-    }
-
-    // ───── Пересчёт весов после постановки cover-а ────────────────────────────
-
-    void UpdateWeightsAfterCover(
-        Vector2Int cover,
-        List<Vector2Int> entrances,
-        HashSet<Vector2Int> regionSet,
-        bool[,] hasCover,
-        int[,] weight)
-    {
-        foreach (Vector2Int entrance in entrances)
-            ReduceWeightAlongShadow(entrance, cover, regionSet, hasCover, weight);
-    }
-
-    void ReduceWeightAlongShadow(
-        Vector2Int entrance,
-        Vector2Int cover,
-        HashSet<Vector2Int> regionSet,
-        bool[,] hasCover,
-        int[,] weight)
-    {
-        int dx = cover.x - entrance.x;
-        int dz = cover.y - entrance.y;
-        if (dx == 0 && dz == 0) return;
-
-        // Луч продолжается ЗА cover-ом в том же направлении.
-        Vector2Int farPoint = new Vector2Int(
-            Mathf.Clamp(cover.x + dx, 0, width - 1),
-            Mathf.Clamp(cover.y + dz, 0, height - 1));
-
-        List<Vector2Int> shadowRay = BresenhamLine(cover, farPoint);
-
-        for (int i = 1; i < shadowRay.Count; i++)
-        {
-            Vector2Int c = shadowRay[i];
-            if (!regionSet.Contains(c)) break;
-            if (hasCover[c.x, c.y]) break;
-
-            if (weight[c.x, c.y] > 0)
-                weight[c.x, c.y]--;
-        }
-    }
-
-    // ───── Видимость ─────────────────────────────────────────────────────────
-
-    bool IsVisibleInRegion(
-        Vector2Int from,
-        Vector2Int to,
-        HashSet<Vector2Int> regionSet,
-        bool[,] hasCover)
-    {
-        List<Vector2Int> line = BresenhamLine(from, to);
-        for (int i = 1; i < line.Count - 1; i++)
-        {
-            Vector2Int c = line[i];
-            if (!regionSet.Contains(c)) return false;
-            if (hasCover[c.x, c.y]) return false;
-        }
         return true;
     }
 
-    // ───── Входы зоны ─────────────────────────────────────────────────────────
-
-    List<Vector2Int> CollectEntrancePoints(ZoneRegion region, HashSet<Vector2Int> regionSet)
+    bool EntranceWindowHasPassage(
+        Vector2Int entranceCell,
+        HashSet<Vector2Int> regionSet,
+        bool[,] hasCover,
+        Vector2Int additionalCover)
     {
-        List<Vector2Int> rawEntrances = new();
+        HashSet<Vector2Int> window = CollectPassageWindow(entranceCell, regionSet, hasCover, additionalCover);
+        if (window.Count == 0)
+            return true;
+
+        List<Vector2Int> outsideSeeds = new();
+        List<Vector2Int> insideSeeds = new();
+
+        foreach (Vector2Int cell in window)
+        {
+            if (regionSet.Contains(cell))
+                insideSeeds.Add(cell);
+            else
+                outsideSeeds.Add(cell);
+        }
+
+        if (outsideSeeds.Count == 0 || insideSeeds.Count == 0)
+            return true;
+
+        HashSet<Vector2Int> visited = new();
+        Queue<Vector2Int> queue = new();
+
+        foreach (Vector2Int seed in outsideSeeds)
+        {
+            queue.Enqueue(seed);
+            visited.Add(seed);
+        }
+
+        while (queue.Count > 0)
+        {
+            Vector2Int cur = queue.Dequeue();
+            if (regionSet.Contains(cur))
+                return true;
+
+            int[] dx = { 1, -1, 0, 0 };
+            int[] dz = { 0, 0, 1, -1 };
+            for (int i = 0; i < 4; i++)
+            {
+                Vector2Int nb = new Vector2Int(cur.x + dx[i], cur.y + dz[i]);
+                if (!window.Contains(nb) || visited.Contains(nb)) continue;
+                visited.Add(nb);
+                queue.Enqueue(nb);
+            }
+        }
+
+        return false;
+    }
+
+    HashSet<Vector2Int> CollectPassageWindow(
+        Vector2Int center,
+        HashSet<Vector2Int> regionSet,
+        bool[,] hasCover,
+        Vector2Int additionalCover)
+    {
+        HashSet<Vector2Int> window = new();
+        for (int ddx = -EntrancePassageWindowRadius; ddx <= EntrancePassageWindowRadius; ddx++)
+        {
+            for (int ddz = -EntrancePassageWindowRadius; ddz <= EntrancePassageWindowRadius; ddz++)
+            {
+                Vector2Int c = new Vector2Int(center.x + ddx, center.y + ddz);
+                if (!IsPassageWalkable(c, regionSet, hasCover, additionalCover)) continue;
+                window.Add(c);
+            }
+        }
+        return window;
+    }
+
+    bool IsPassageWalkable(
+        Vector2Int cell,
+        HashSet<Vector2Int> regionSet,
+        bool[,] hasCover,
+        Vector2Int additionalCover)
+    {
+        if (!IsInsideMap(cell.x, cell.y)) return false;
+        if (cell == additionalCover || hasCover[cell.x, cell.y]) return false;
+        if (cellTypes[cell.x, cell.y] == BlockType.Wall) return false;
+
+        if (regionSet.Contains(cell))
+            return true;
+
+        return IsOutsideWalkableType(cellTypes[cell.x, cell.y]);
+    }
+
+    static bool IsOutsideWalkableType(BlockType type) =>
+        type is BlockType.Main or BlockType.Link or BlockType.Road
+            or BlockType.Neutral or BlockType.Spawn or BlockType.Site
+            or BlockType.Room or BlockType.Pocket or BlockType.Floor;
+
+    static int ChebyshevDistance(Vector2Int a, Vector2Int b) =>
+        Mathf.Max(Mathf.Abs(a.x - b.x), Mathf.Abs(a.y - b.y));
+
+    static Vector2 ComputeRegionCentroid(ZoneRegion region)
+    {
+        long sumX = 0;
+        long sumY = 0;
+        foreach (Vector2Int cell in region.Cells)
+        {
+            sumX += cell.x;
+            sumY += cell.y;
+        }
+
+        int n = region.Cells.Count;
+        return new Vector2(sumX / (float)n, sumY / (float)n);
+    }
+
+    void SortZoneCoverCandidates(List<Vector2Int> cells, int[,] cellWeightGrid, Vector2 centroid)
+    {
+        cells.Sort((a, b) =>
+        {
+            int oa = cellWeightGrid[a.x, a.y];
+            int ob = cellWeightGrid[b.x, b.y];
+            if (oa != ob) return ob.CompareTo(oa);
+
+            float da = (a.x - centroid.x) * (a.x - centroid.x) + (a.y - centroid.y) * (a.y - centroid.y);
+            float db = (b.x - centroid.x) * (b.x - centroid.x) + (b.y - centroid.y) * (b.y - centroid.y);
+            if (!Mathf.Approximately(da, db)) return da.CompareTo(db);
+
+            if (a.x != b.x) return a.x.CompareTo(b.x);
+            return a.y.CompareTo(b.y);
+        });
+
+        ApplyWeightTieShuffle(cells, cellWeightGrid);
+    }
+
+    void SortCellsByWeight(List<Vector2Int> cells, int[,] cellWeightGrid)
+    {
+        cells.Sort((a, b) =>
+        {
+            int wa = cellWeightGrid[a.x, a.y];
+            int wb = cellWeightGrid[b.x, b.y];
+            if (wa != wb) return wb.CompareTo(wa);
+            if (a.x != b.x) return a.x.CompareTo(b.x);
+            return a.y.CompareTo(b.y);
+        });
+
+        ApplyWeightTieShuffle(cells, cellWeightGrid);
+    }
+
+    void ApplyWeightTieShuffle(List<Vector2Int> cells, int[,] cellWeightGrid)
+    {
+        float bias = Mathf.Clamp01(coverRandomBias);
+        if (bias <= 0f || cells.Count < 2) return;
+
+        int topOpen = cellWeightGrid[cells[0].x, cells[0].y];
+        int tieCount = 1;
+        while (tieCount < cells.Count && cellWeightGrid[cells[tieCount].x, cells[tieCount].y] == topOpen)
+            tieCount++;
+
+        if (tieCount < 2) return;
+
+        int shuffleCount = Mathf.Max(2, Mathf.RoundToInt(tieCount * bias));
+        shuffleCount = Mathf.Min(shuffleCount, tieCount);
+        ShuffleListRange(cells, 0, shuffleCount);
+    }
+
+    static void ShuffleListRange<T>(List<T> list, int start, int count)
+    {
+        int end = start + count - 1;
+        for (int i = end; i > start; i--)
+        {
+            int j = Random.Range(start, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    bool IsSingleSidedRoadWallCover(int x, int z) =>
+        CountRoadCoverWallSides(x, z) == 1;
+
+    int CountRoadCoverWallSides(int x, int z)
+    {
+        int[] dx = { 1, -1, 0, 0 };
+        int[] dz = { 0, 0, 1, -1 };
+        int wallSides = 0;
+
+        for (int i = 0; i < 4; i++)
+        {
+            int nx = x + dx[i];
+            int nz = z + dz[i];
+
+            if (!IsInsideMap(nx, nz))
+            {
+                wallSides++;
+                continue;
+            }
+
+            BlockType nt = cellTypes[nx, nz];
+            if (nt is BlockType.Wall or BlockType.Empty)
+                wallSides++;
+        }
+
+        return wallSides;
+    }
+
+    List<Vector2Int> CollectEntranceBorderCells(ZoneRegion region, HashSet<Vector2Int> regionSet)
+    {
+        List<Vector2Int> entrances = new();
         int[] dx = { 1, -1, 0, 0 };
         int[] dz = { 0, 0, 1, -1 };
 
@@ -534,125 +850,32 @@ public partial class MapGenerator
                 if (!IsInsideMap(nx, nz)) continue;
 
                 BlockType outside = cellTypes[nx, nz];
-                if (outside == BlockType.Main || outside == BlockType.Link ||
-                    outside == BlockType.Room  || outside == BlockType.Site ||
-                    outside == BlockType.Neutral || outside == BlockType.Spawn)
+                if (outside is BlockType.Main or BlockType.Link or BlockType.Room
+                    or BlockType.Site or BlockType.Neutral or BlockType.Spawn)
                 {
-                    // Сосед другого типа, но ещё Floor-зона = это вход в данную зону.
                     if (!regionSet.Contains(new Vector2Int(nx, nz)))
                     {
-                        rawEntrances.Add(cell);
+                        entrances.Add(cell);
                         break;
                     }
                 }
             }
         }
 
-        if (rawEntrances.Count == 0) return rawEntrances;
-
-        List<List<Vector2Int>> clusters = ClusterAdjacentCells(rawEntrances);
-        List<Vector2Int> points = new();
-        foreach (List<Vector2Int> cluster in clusters)
-            points.Add(ClusterCenter(cluster));
-        return points;
-    }
-
-    HashSet<Vector2Int> BuildEntranceForbidden(
-        List<Vector2Int> entrances,
-        HashSet<Vector2Int> regionSet)
-    {
-        HashSet<Vector2Int> forbidden = new();
-        int r = Mathf.Max(0, coverEntranceForbiddenRadius);
-        if (r == 0) return forbidden;
-
-        foreach (Vector2Int entrance in entrances)
-        {
-            for (int ddx = -r; ddx <= r; ddx++)
-            {
-                for (int ddz = -r; ddz <= r; ddz++)
-                {
-                    if (Mathf.Max(Mathf.Abs(ddx), Mathf.Abs(ddz)) > r) continue;
-                    Vector2Int c = new Vector2Int(entrance.x + ddx, entrance.y + ddz);
-                    if (regionSet.Contains(c)) forbidden.Add(c);
-                }
-            }
-        }
-
-        return forbidden;
-    }
-
-    // ───── Вспомогательные ────────────────────────────────────────────────────
-
-    List<List<Vector2Int>> ClusterAdjacentCells(List<Vector2Int> cells)
-    {
-        List<List<Vector2Int>> clusters = new();
-        HashSet<Vector2Int> remaining = new(cells);
-
-        while (remaining.Count > 0)
-        {
-            Vector2Int seed = default;
-            foreach (Vector2Int c in remaining) { seed = c; break; }
-
-            List<Vector2Int> cluster = new();
-            Queue<Vector2Int> queue = new();
-            queue.Enqueue(seed);
-            remaining.Remove(seed);
-
-            while (queue.Count > 0)
-            {
-                Vector2Int cur = queue.Dequeue();
-                cluster.Add(cur);
-                for (int ddx = -1; ddx <= 1; ddx++)
-                for (int ddz = -1; ddz <= 1; ddz++)
-                {
-                    if (ddx == 0 && ddz == 0) continue;
-                    Vector2Int nb = new Vector2Int(cur.x + ddx, cur.y + ddz);
-                    if (remaining.Remove(nb)) queue.Enqueue(nb);
-                }
-            }
-
-            clusters.Add(cluster);
-        }
-
-        return clusters;
-    }
-
-    Vector2Int ClusterCenter(List<Vector2Int> cluster)
-    {
-        int sx = 0, sz = 0;
-        foreach (Vector2Int c in cluster) { sx += c.x; sz += c.y; }
-        return new Vector2Int(sx / cluster.Count, sz / cluster.Count);
+        return entrances;
     }
 
     bool HasCoverWithinSpacing(Vector2Int cell, List<Vector2Int> placed, int spacing)
     {
         foreach (Vector2Int p in placed)
         {
-            if (Mathf.Max(Mathf.Abs(cell.x - p.x), Mathf.Abs(cell.y - p.y)) < spacing)
+            if (ChebyshevDistance(cell, p) < spacing)
                 return true;
         }
         return false;
     }
 
-    static List<Vector2Int> BresenhamLine(Vector2Int from, Vector2Int to)
-    {
-        List<Vector2Int> points = new();
-        int x0 = from.x, y0 = from.y, x1 = to.x, y1 = to.y;
-        int dx = Mathf.Abs(x1 - x0), dy = Mathf.Abs(y1 - y0);
-        int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-        int err = dx - dy;
-        while (true)
-        {
-            points.Add(new Vector2Int(x0, y0));
-            if (x0 == x1 && y0 == y1) break;
-            int e2 = err * 2;
-            if (e2 > -dy) { err -= dy; x0 += sx; }
-            if (e2 < dx)  { err += dx; y0 += sy; }
-        }
-        return points;
-    }
-
-    void ShuffleList<T>(List<T> list)
+    static void ShuffleList<T>(List<T> list)
     {
         for (int i = list.Count - 1; i > 0; i--)
         {
@@ -669,5 +892,85 @@ public partial class MapGenerator
             Vector3 pos = new Vector3(cell.x * blockSize, blockSize + level * blockSize, cell.y * blockSize);
             Instantiate(coverPrefab, pos, Quaternion.identity, geometryRoot);
         }
+    }
+
+    void VisualizeFloorWeightLabels()
+    {
+        Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        HashSet<Vector2Int> hiddenCells = CollectWeightLabelHiddenCells();
+
+        int minDisplay = int.MaxValue;
+        int maxDisplay = int.MinValue;
+        CollectFloorLabelDisplayRange(hiddenCells, ref minDisplay, ref maxDisplay);
+        if (minDisplay == int.MaxValue)
+            return;
+
+        GameObject labelsRoot = new GameObject("WeightLabels");
+        labelsRoot.transform.SetParent(geometryRoot, false);
+
+        float y = blockSize * weightLabelHeight;
+        float baseCharSize = weightLabelCharacterSize * blockSize;
+
+        for (int x = 0; x < width; x++)
+        {
+            for (int z = 0; z < height; z++)
+            {
+                if (!TryGetFloorLabelDisplay(x, z, hiddenCells, out int display))
+                    continue;
+
+                float t = DisplayToNormalized(display, minDisplay, maxDisplay);
+                float charSize = baseCharSize * Mathf.Lerp(weightLabelSizeMinMul, weightLabelSizeMaxMul, t);
+                Color color = Color.Lerp(WeightLabelColorLow, WeightLabelColorHigh, t);
+
+                GameObject labelGo = new GameObject($"W_{x}_{z}_{display}");
+                labelGo.transform.SetParent(labelsRoot.transform, false);
+                labelGo.transform.position = new Vector3(x * blockSize, y, z * blockSize);
+                labelGo.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+                labelGo.AddComponent<TextMesh>();
+                FloorWeightLabel label = labelGo.AddComponent<FloorWeightLabel>();
+                label.Configure(display.ToString(), font, charSize, color);
+            }
+        }
+    }
+
+    void CollectFloorLabelDisplayRange(HashSet<Vector2Int> hiddenCells, ref int minDisplay, ref int maxDisplay)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            for (int z = 0; z < height; z++)
+            {
+                if (!TryGetFloorLabelDisplay(x, z, hiddenCells, out int display))
+                    continue;
+
+                minDisplay = Mathf.Min(minDisplay, display);
+                maxDisplay = Mathf.Max(maxDisplay, display);
+            }
+        }
+    }
+
+    bool TryGetFloorLabelDisplay(int x, int z, HashSet<Vector2Int> hiddenCells, out int display)
+    {
+        display = 0;
+        if (floorInstances[x, z] == null)
+            return false;
+
+        Vector2Int cell = new(x, z);
+        if (hiddenCells.Contains(cell))
+            return false;
+
+        BlockType type = cellTypes[x, z];
+        if (type is BlockType.Empty or BlockType.Wall or BlockType.None)
+            return false;
+
+        display = cellWeights[x, z];
+        return true;
+    }
+
+    static float DisplayToNormalized(int display, int minDisplay, int maxDisplay)
+    {
+        if (maxDisplay <= minDisplay)
+            return 1f;
+        return Mathf.Clamp01((display - minDisplay) / (float)(maxDisplay - minDisplay));
     }
 }

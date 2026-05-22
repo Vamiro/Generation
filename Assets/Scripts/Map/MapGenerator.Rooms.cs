@@ -25,10 +25,8 @@ public partial class MapGenerator
                 if (roomsPerMainRoad > 0)
                     TryPlaceRoomsInRange(path, roomsPerMainRoad, 0.25f, 0.65f, sizeMin, sizeMax, offset, BlockType.Pocket);
 
-                // Тип Б: Pre-site Room (Hookah-like) — ставится прямо перед сайтом,
-                //         предпочитая направление к ближайшему сайту.
                 if (enablePreSiteRooms)
-                    TryPlacePreSiteRoom(path, preSizeMin, preSizeMax, offset);
+                    TryPlacePreSiteRoom(path, preSizeMin, preSizeMax);
             }
         }
 
@@ -43,32 +41,6 @@ public partial class MapGenerator
                 TryPlaceRoomsInRange(path, 1, 0.40f, 0.60f, cubMin, cubMax, offset, BlockType.Pocket);
             }
         }
-    }
-
-    // ───── Pre-site Room ─────────────────────────────────────────────────────
-    // Ищет последнюю Main-клетку на пути (до сайта) и ставит Room,
-    // предпочитая сторону, ближайшую к сайту — комната оказывается прямо перед входом.
-    void TryPlacePreSiteRoom(List<Vector2Int> path, int sizeMin, int sizeMax, int offset)
-    {
-        // Идём с конца пути — ищем последнюю клетку, которая ещё Main.
-        int lastMainIdx = -1;
-        for (int i = path.Count - 1; i >= 0; i--)
-        {
-            Vector2Int c = path[i];
-            if (IsInsideMap(c.x, c.y) && cellTypes[c.x, c.y] == BlockType.Main)
-            {
-                lastMainIdx = i;
-                break;
-            }
-        }
-        if (lastMainIdx < 3) return;
-
-        int roomWidth = Random.Range(sizeMin, sizeMax + 1);
-        int roomDepth = Random.Range(sizeMin, sizeMax + 1);
-        int targetIdx = Mathf.Clamp(lastMainIdx - 1, 1, path.Count - 2);
-
-        TryPlaceGallery(path, targetIdx, roomWidth, roomDepth, offset, BlockType.Room,
-            preferSiteDirection: true);
     }
 
     // ───── Generic gallery/room placement ────────────────────────────────────

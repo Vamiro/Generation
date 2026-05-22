@@ -14,7 +14,7 @@ public enum BlockType
     Site,
     Road,
     Pocket, // Открытый карман / галерея вдоль дороги — без стен со стороны road
-    Room    // Закрытая комната с choke-входом (Hookah-подобная)
+    Room    // Pre-site комната (закрытая, 1 проход на main и 1 на site)
 }
 
 

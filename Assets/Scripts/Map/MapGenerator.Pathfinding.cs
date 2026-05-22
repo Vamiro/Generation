@@ -39,7 +39,7 @@ public partial class MapGenerator
     {
         return blockType switch
         {
-            BlockType.Main => new PathProfile(mainWidth, astarMainHorizontalBias, true),
+            BlockType.Main => new PathProfile(mainWidth, astarMainHorizontalBias, false),
             BlockType.Link => new PathProfile(linkWidth, astarLinkHorizontalBias, false),
             _ => new PathProfile(1, 0.5f, false)
         };

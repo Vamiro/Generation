@@ -351,7 +351,7 @@ MonoBehaviour:
     max: 12
   innerPadding: 4
   spawnHorizontalOffset: 3
-  siteLineBiasToDefender: 0.388
+  siteLineBiasToDefender: 0.245
   siteVerticalJitter: 2
   siteCenterDriftMax: 4
   siteMinCenterDistanceMultiplier: 2
@@ -407,7 +407,7 @@ MonoBehaviour:
   neutralMaterial: {fileID: 2100000, guid: 31094643ef01ba941b728cb44118b939, type: 2}
   roomMaterial: {fileID: 2100000, guid: 0b571b0b94de14ba8a1cb9708f4eb74e, type: 2}
   pocketMaterial: {fileID: 0}
-  enableRooms: 1
+  enableRooms: 0
   roomsPerMainRoad: 1
   roomSize:
     min: 3
@@ -427,26 +427,23 @@ MonoBehaviour:
   outerWallThickness: 2
   outerWallHeight: 3
   enableCovers: 1
+  coverPlacementMode: -1
+  weightLabelHeight: 1.1
+  weightLabelCharacterSize: 0.7
+  weightLabelSizeMinMul: 0.85
+  weightLabelSizeMaxMul: 1.55
   coverableZones: -1
   coverHeight: 1
-  coverMinSpacing: 2
-  coverMinEntranceVisibility: 1
+  coverMinOpenness: 2
   coverRandomBias: 0.2
-  coverEntranceForbiddenRadius: 1
-  coverMaxFillRatio: 0.1
-  coverMaxPerZone: 5
-  coverStopFraction: 0.45
-  coverMultiCellChance:
-    min: 0.25
-    max: 0.45
+  maxCoversPerSite: 6
+  maxCoversPerOtherZone: 4
+  maxCoversOnRoads: 29
+  roadCoverMinSpacing: 2
   roadCoverRange:
     min: 0.2
     max: 0.8
-  roadCoversPerPath:
-    min: 1
-    max: 2
-  roadCoverChance: 0.7
-  roadCoverMinExposure: 3
+  roadWallRunMinLength: 4
   buildNavMesh: 1
   navMeshAgentTypeId: 0
 --- !u!4 &1158948890

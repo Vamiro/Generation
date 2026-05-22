@@ -205,9 +205,9 @@ Dictionary<BlockType, HashSet<BlockComponent>> zoneBlocks // быстрый до
         ├── BuildDefenderLink        ──→ A* defenderSpawn↔neutralCenter, тип Link
         └── BuildNeutralToSiteLinks  ──→ A* neutralCenter↔siteEntry, тип Link
 [3.5] PlaceRooms                     — галереи вдоль main-дорог (из mainRoadPaths)
-[4] ShapeZoneEnclosures              — для каждой Site/Neutral/Spawn/Room:
+[4] ShapeZoneEnclosures              — только Site / Neutral / Spawn:
                                        сужает дорожные «выходы» до maxEntranceWidth клеток,
-                                       лишнее → Wall или префаб укрытия
+                                       лишнее → Wall или префаб укрытия. Room/Pocket — без стен.
 [5] ValidateGeneratedLayout          — BFS: spawn→site→neutral достижимы?
 [6] BuildAndRegisterZoneObjects      — флуд-филл регионов в RuntimeZones,
                                        создаёт MapZoneComponent в Zones/ + регистрирует в MapManager
@@ -335,11 +335,11 @@ A* с учётом штрафов и предпочтений.
 
 ### 4.8 Слой Rooms (`MapGenerator.Rooms.cs`)
 
-`PlaceRooms()` размещает комнаты двух типов вдоль main-дорог:
+`PlaceRooms()` размещает **Pocket-галереи** вдоль main (и link-кубби) — открыты со стороны дороги, без `ShapeZoneEnclosures`:
 
-**Тип А — Gallery (25%–65% пути):** прямоугольная выпуклость перпендикулярно дороге. Ломает длинный sight-line на main-коридоре. Аналог mid-галерей.
+**Тип А — Gallery (25%–65% пути):** выпуклость перпендикулярно main. Ломает длинный sight-line.
 
-**Тип Б — Pre-site room (70%–88% пути):** небольшая комната у входа в сайт. Staging area для атакующих, off-site hold для защитников. Аналог Hookah/Showers в Valorant.
+**Тип Б — Pre-site Room:** `BlockType.Room` перед сайтом, **1 клетка зазора** до Main и Site, кольцо из `Wall` с **одним** проходом на дорогу и **одним** на сайт (`MapGenerator.PreSiteRooms.cs`). В группе весов с дорогой (`Main`/`Link`/`Room`/`Pocket`).
 
 Параметры: `enableRooms`, `roomsPerMainRoad`, `roomSizeMin/Max`, `roomOffsetFromRoad`, `enablePreSiteRooms`, `preSiteRoomSizeMin/Max`.
 
@@ -361,10 +361,17 @@ A* с учётом штрафов и предпочтений.
 
 ### 4.9 Слой Covers (`MapGenerator.Covers.cs`)
 
-**Сейчас отключён** (`enableCovers = false` по умолчанию). Будет переписан после финализации комнат (см. roadmap).
+**Режим (`coverPlacementMode`, флаги):** `Prefabs` — укрытия; `WeightLabels` — TextMesh (`cellWeights`), ярко-зелёный→красный на всём полу (Site/Neutral/Spawn/дороги/комнаты). **Оба:** префабы, затем пересчёт и метки. Без меток: клетки выхода и Main/Link у входа (`CollectWeightLabelHiddenCells`).
 
-Параметры (могут меняться):
-- `enableCovers`, `coverableZones` (Site / Neutral / Spawn), `coverHeight`, `coverMaxFillRatio`, `coverMaxPerZone`, `coverMinSpacing`, плюс параметры конкретного алгоритма.
+**Вес клетки (`cellWeights`):** 4 луча (N/E/S/W), все пройденные клетки до `Wall` или **уже поставленного укрытия** (`coverOccupancy`); среднее `sum/4`. После **каждого** `PlaceCoverAt` — сразу `RecomputeCellWeightsFromRays()` по всей карте; следующий кандидат — по обновлённым весам.
+
+**Алгоритм (упрощённый):**
+1. `cellWeights` — среднее длин 4 лучей (число клеток до стены в каждую сторону).
+2. **Порядок:** Site → Neutral → дороги (Main+Link). **Spawn** в cover-расстановке не участвует.
+3. **Site / Neutral:** до `maxCoversPerSite` / `maxCoversPerOtherZone`; выбор по макс. `cellWeights`, при равенстве — ближе к центроиду; `coverRandomBias` — shuffle топ-веса. Входы: проверка 3×3 (связность снаружи↔внутри).
+4. **Дороги:** до `maxCoversOnRoads` (default 8). Скан **всех** клеток Main/Link в кисти пути (`roadCoverRange`), не только центр: клетка у стены = снаружи Wall/Empty, вдоль стены открыт коридор. Подряд ≥ `roadWallRunMinLength` → укрытие в середине run. **Fallback:** клетки у стены с `cellWeights ≥ coverMinOpenness` (типично 6–7). Приоритет: длина run, затем вес; `roadCoverMinSpacing`.
+
+Параметры: `maxCoversPerSite`, `maxCoversPerOtherZone`, `maxCoversOnRoads`, `coverMinOpenness`, `coverRandomBias`, `roadCoverRange`, `roadCoverMinSpacing`, `roadWallRunMinLength`.
 
 **Карта занятости (`coverOccupancy[,]`):**
 - Заполняется в `PlaceCovers` (тот же буфер, что внутренний `hasCover`). Поле `MapGenerator`, видно наружу через `IsCellOccupiedByCover(x, z)`.

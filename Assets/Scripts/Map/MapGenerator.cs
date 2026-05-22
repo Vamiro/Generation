@@ -97,7 +97,7 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Range(0, 3), Tooltip("Максимальное количество галерей на одну main-дорогу (посередине пути).")] private int roomsPerMainRoad = 1;
     [SerializeField, Tooltip("Размер галереи (мин–макс клеток по каждой стороне).")] private IntRange roomSize = new IntRange(3, 5);
     [SerializeField, Min(1), Tooltip("Отступ комнаты от края дороги по перпендикуляру (клеток).")] private int roomOffsetFromRoad = 1;
-    [SerializeField, Tooltip("Генерировать pre-site комнату перед каждым входом в сайт (аналог Hookah/Showers в Valorant).")] private bool enablePreSiteRooms = true;
+    [SerializeField, Tooltip("Pre-site Room у сайта: зазор 1 клетка до Main/Site, стена с одиночными проходами.")] private bool enablePreSiteRooms = true;
     [SerializeField, Tooltip("Размер pre-site комнаты (мин–макс клеток).")] private IntRange preSiteRoomSize = new IntRange(2, 4);
     [SerializeField, Tooltip("Генерировать кубби (маленькие ниши) вдоль link/mid-дорог — позиции для информации и фланков.")] private bool enableLinkRooms = true;
     [SerializeField, Tooltip("Размер кубби на link-дороге (мин–макс клеток). Обычно 1–2.")] private IntRange linkRoomSize = new IntRange(1, 2);
@@ -112,25 +112,24 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Min(1), Tooltip("Высота стен в блоках (количество уровней колонны).")] private int outerWallHeight = 2;
 
     [Header("Настройки укрытий")]
-    [SerializeField, Tooltip("Включить расстановку укрытий после генерации карты.")] private bool enableCovers = true;
-    [SerializeField, Tooltip("Зоны для расстановки укрытий. Site/Neutral/Room — весовой алгоритм. Main/Link — отдельный алгоритм (wall-adjacent, экспозиция).")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
+    [SerializeField, Tooltip("Включить шаг укрытий после генерации (префабы или метки весов).")] private bool enableCovers = true;
+    [SerializeField, Tooltip("Флаги: Prefabs — укрытия; WeightLabels — числа веса на карте (Site/Neutral/Spawn/дороги). Оба: сначала префабы, потом метки.")] private CoverPlacementMode coverPlacementMode = CoverPlacementMode.Prefabs | CoverPlacementMode.WeightLabels;
+    [SerializeField, Min(0.5f), Tooltip("Высота метки над полом в единицах blockSize.")] private float weightLabelHeight = 1.1f;
+    [SerializeField, Min(0.05f), Tooltip("Базовый размер символов TextMesh (масштаб × вес).")] private float weightLabelCharacterSize = 0.32f;
+    [SerializeField, Range(0.5f, 1.5f), Tooltip("Множитель размера для минимального веса на карте.")] private float weightLabelSizeMinMul = 0.85f;
+    [SerializeField, Range(0.5f, 2.5f), Tooltip("Множитель размера для максимального веса на карте.")] private float weightLabelSizeMaxMul = 1.55f;
+    [SerializeField, Tooltip("Зоны для укрытий. Site/Neutral/Spawn — открытые клетки внутри зоны. Main/Link/Room — общий лимит дорог: у стены, случайно (Room и Pocket по всей карте).")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
     [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
-    [SerializeField, Min(1), Tooltip("Минимальное расстояние Чебышёва между двумя укрытиями (действует и в зонах, и на дорогах).")] private int coverMinSpacing = 2;
-
-    [Header("Укрытия в зонах (Site / Neutral / Room / Spawn)")]
-    [SerializeField, Min(1), Tooltip("Минимальный счётчик входов, из которых клетка должна просматриваться.")] private int coverMinEntranceVisibility = 1;
-    [SerializeField, Range(0f, 1f), Tooltip("Случайный шум к весу. 0 = детерминировано, 0.2 = лёгкое разнообразие.")] private float coverRandomBias = 0.2f;
-    [SerializeField, Min(0), Tooltip("Запрет cover в N клетках от входа в зону.")] private int coverEntranceForbiddenRadius = 1;
-    [SerializeField, Range(0f, 1f), Tooltip("Максимальная доля клеток зоны, занимаемая укрытиями.")] private float coverMaxFillRatio = 0.20f;
-    [SerializeField, Min(0), Tooltip("Жёсткий лимит укрытий на одну зону. 0 — без лимита.")] private int coverMaxPerZone = 0;
-    [SerializeField, Range(0.01f, 1f), Tooltip("Стоп когда максимальный вес упал ниже X% от начального. 0.45 = Valorant-плотность, 0.1 = плотнее.")] private float coverStopFraction = 0.45f;
-    [SerializeField, Tooltip("Вероятность двойного укрытия (2 клетки рядом).")] private FloatRange coverMultiCellChance = new FloatRange(0.25f, 0.45f);
+    [SerializeField, Min(1), Tooltip("Мин. средний вес (сумма 4 лучей / 4, входы не считаются). Ниже — не ставим укрытие.")] private int coverMinOpenness = 2;
+    [SerializeField, Range(0f, 1f), Tooltip("Случайный шум при выборе среди одинаково открытых клеток.")] private float coverRandomBias = 0.2f;
+    [SerializeField, Min(1), Tooltip("Макс. укрытий на один Site (могут стоять рядом).")] private int maxCoversPerSite = 6;
+    [SerializeField, Min(0), Tooltip("Макс. укрытий на прочие зоны (Neutral/Spawn) за регион. 0 = не ставить.")] private int maxCoversPerOtherZone = 4;
+    [SerializeField, Min(1), Tooltip("Макс. укрытий на дорогах (Main+Link): длинные стены у края + fallback по весу.")] private int maxCoversOnRoads = 8;
+    [SerializeField, Min(1), Tooltip("Мин. расстояние между укрытиями на дорогах (Чебышёв). На Site = 1 (кластеры).")] private int roadCoverMinSpacing = 2;
 
     [Header("Укрытия на дорогах (Main / Link)")]
-    [SerializeField, Tooltip("Диапазон позиций вдоль пути. Концы исключены — там входы в зоны.")] private FloatRange roadCoverRange = new FloatRange(0.20f, 0.80f);
-    [SerializeField, Tooltip("Количество укрытий на один отрезок пути. Алгоритм выбирает наиболее открытые точки.")] private IntRange roadCoversPerPath = new IntRange(1, 3);
-    [SerializeField, Range(0f, 1f), Tooltip("Вероятность, что отрезок пути вообще получит укрытие.")] private float roadCoverChance = 0.75f;
-    [SerializeField, Min(1), Tooltip("Минимальная дальность обзора по горизонтали/вертикали (в клетках) для постановки cover. 2 = почти любое открытое место, 4 = только длинные прямые.")] private int roadCoverMinExposure = 2;
+    [SerializeField, Tooltip("Диапазон позиций вдоль пути (концы пути без cover).")] private FloatRange roadCoverRange = new FloatRange(0.20f, 0.80f);
+    [SerializeField, Min(2), Tooltip("Мин. длина участка стены подряд у края дороги — в середину ставится укрытие.")] private int roadWallRunMinLength = 5;
 
     // Логическая сетка карты: тип каждой клетки. Empty = снаружи карты (нет ничего).
     private BlockType[,] cellTypes;
@@ -279,10 +278,10 @@ public partial class MapGenerator : MonoBehaviour
         // Разметка зон (Спавны, Сайты, Main, Link, Neutral) — рисуем "по живому", создаём пол под помеченными клетками.
         MarkZones();
 
-        // Размещаем комнаты-галереи вдоль main-дорог (до ShapeZoneEnclosures, чтобы входы в комнаты тоже сужались)
+        // Галереи + pre-site Room (стены pre-site — в PlaceRooms)
         PlaceRooms();
 
-        // Окружаем Site/Neutral/Spawn/Room стенами и сужаем входы (choke points)
+        // Окружаем Site/Neutral/Spawn стенами и сужаем входы (choke points). Room/Pocket — без стен.
         ShapeZoneEnclosures();
 
         ValidateGeneratedLayout();
