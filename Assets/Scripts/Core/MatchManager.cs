@@ -285,8 +285,9 @@ public class MatchManager : MonoSingleton<MatchManager>
                     if (stats != null)
                         stats.OnMatchEnded(outcome, _stateTimer, attackerSiteName, attackersAlive, defendersAlive);
 
+                    string winRate = stats != null ? stats.GetWinRateLogSuffix() : "WR: —";
                     Debug.Log($"MatchManager: матч #{matchesPlayed + 1} завершён — {outcome}. " +
-                              $"A={attackersAlive}, D={defendersAlive}, t={_stateTimer:F1}s");
+                              $"A={attackersAlive}, D={defendersAlive}, t={_stateTimer:F1}s, {winRate}");
 
                     matchesPlayed++;
                     DestroyTeams();
@@ -391,8 +392,6 @@ public class MatchManager : MonoSingleton<MatchManager>
 
         var stats = MatchStatsCollector.Instance;
         if (stats != null) stats.OnMatchStarted();
-
-        Debug.Log($"MatchManager: матч #{matchesPlayed + 1} стартовал. A={_attackers.LiveBotsCount}, D={_defenders.LiveBotsCount}.");
     }
 
     private void DestroyTeams()

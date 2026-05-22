@@ -103,6 +103,13 @@ public class MatchStatsCollector : MonoSingleton<MatchStatsCollector>
     public int AttackerWins => attackerWins;
     public int DefenderWins => defenderWins;
 
+    public string GetWinRateLogSuffix()
+    {
+        if (decisiveMatches <= 0)
+            return "WR: —";
+        return $"WR A={attackerWinRate} D={defenderWinRate}";
+    }
+
     // ─────────────────── API для MatchManager ───────────────────
 
     public void OnMatchStarted()

@@ -183,7 +183,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 83
+  orthographic size: 82
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -351,7 +351,7 @@ MonoBehaviour:
     max: 12
   innerPadding: 4
   spawnHorizontalOffset: 3
-  siteLineBiasToDefender: 0.245
+  siteLineBiasToDefender: 0.183
   siteVerticalJitter: 2
   siteCenterDriftMax: 4
   siteMinCenterDistanceMultiplier: 2
