@@ -86,10 +86,10 @@ public class AttackerTeamManager : TeamManager
             {
                 if (bot == null) continue;
                 if (bot.Role == BotRole.Attacker)
-                    MoveBotToZoneOrPeek(bot, FindPreferredRoad(targetSite, RoadType.Main) ?? targetSite);
+                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Main) ?? targetSite);
 
                 if (bot.Role == BotRole.Flanker)
-                    MoveBotToZoneOrPeek(bot, FindPreferredRoad(targetSite, RoadType.Link) ?? targetSite);
+                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Link) ?? targetSite);
 
                 if (bot.Role == BotRole.Scout)
                 {
@@ -98,13 +98,13 @@ public class AttackerTeamManager : TeamManager
                     {
                         var neutralZones = MapManager.Instance.NeutralZones;
                         if (neutralZones.Count > 0)
-                            MoveBotToZoneOrPeek(bot, neutralZones[Random.Range(0, neutralZones.Count)]);
+                            bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
                     }
                     else
                     {
                         var roadZones = MapManager.Instance.RoadZones;
                         if (roadZones.Count > 0)
-                            MoveBotToZoneOrPeek(bot, roadZones[Random.Range(0, roadZones.Count)]);
+                            bot.MoveToZone(roadZones[Random.Range(0, roadZones.Count)]);
                     }
                 }
             }
@@ -125,13 +125,12 @@ public class AttackerTeamManager : TeamManager
                 if (bot == null) continue;
                 var neutralZones = MapManager.Instance.NeutralZones;
                 if (neutralZones.Count > 0)
-                    MoveBotToZoneOrPeek(bot, neutralZones[Random.Range(0, neutralZones.Count)]);
+                    bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
             }
 
             if (OtherTeam != null)
                 OtherTeam.NotifyDefendersAboutRotate(targetSite);
             
-            // Назначаем цели
             _isMovingToSite = false;
         }
     }
@@ -174,26 +173,8 @@ public class AttackerTeamManager : TeamManager
         {
             if (bot == null) continue;
             if (bot.Role is BotRole.Attacker or BotRole.Flanker)
-            {
-                // На сайте Hold-слоты "развёрнуты на вход" (как у защитников),
-                // но это ровно те углы, которые атакеру и нужно занять после захода:
-                // встать у cover-а сайта, смотреть наружу от cover-а — это естественная
-                // постплант-позиция. Если все Hold-слоты в сайте уже заняты (например,
-                // приехали раньше товарищей) — фоллбэк на случайную точку сайта.
-                if (!bot.TryMoveToTacticalSlot(targetSite, TacticalSlotKind.HoldDefender))
-                    bot.MoveToZone(targetSite);
-            }
+                bot.MoveToZone(targetSite);
         }
-    }
-
-    // Helper: попробовать занять Peek-слот в зоне, иначе обычное MoveToZone.
-    // Peek-слоты живут на дорогах/нейтрале, Hold-слоты — внутри сайтов/комнат.
-    // Поэтому пробуем Peek; если зона — сайт, Peek-слотов там нет и сразу идёт фоллбэк.
-    private static void MoveBotToZoneOrPeek(BotComponent bot, MapZoneComponent zone)
-    {
-        if (bot == null || zone == null) return;
-        if (bot.TryMoveToTacticalSlot(zone, TacticalSlotKind.PeekAttacker)) return;
-        bot.MoveToZone(zone);
     }
 
     private MapZoneComponent FindPreferredRoad(SiteZoneComponent site, RoadType preferredType)

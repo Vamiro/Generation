@@ -464,6 +464,68 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1250445129
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1250445131}
+  - component: {fileID: 1250445130}
+  m_Layer: 0
+  m_Name: Stats
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1250445130
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1250445129}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2413d609591d441b68196cf36ac9fd94, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  autoSaveOnFinish: 1
+  resetOnMapRegen: 1
+  matchesPlayed: 0
+  decisiveMatches: 0
+  attackerWins: 0
+  defenderWins: 0
+  timeouts: 0
+  attackerWinRate: "\u2014"
+  defenderWinRate: "\u2014"
+  avgRoundDuration: "\u2014"
+  avgTimeToFirstBlood: "\u2014"
+  avgWinnerSurvivors: "\u2014"
+  siteAttackStats: "\u2014"
+  deathsAttackerRole: 0
+  deathsFlankerRole: 0
+  deathsScoutRole: 0
+  deathsDefenderRole: 0
+  topKillZones: "\u2014"
+--- !u!4 &1250445131
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1250445129}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 32.249294, y: -11.943807, z: 14.748417}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1694810178
 GameObject:
   m_ObjectHideFlags: 0
@@ -519,8 +581,65 @@ MonoBehaviour:
   scaleFixedDeltaTime: 1
   simulationSpeedStep: 0.5
   enableSpeedHotkeys: 1
+  headlessMode: 0
+  headlessTargetFps: 10
   matchesPlayed: 0
   currentState: Idle
+--- !u!1 &1967758778
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1967758780}
+  - component: {fileID: 1967758779}
+  m_Layer: 0
+  m_Name: MapManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1967758779
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1967758778}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6f1a54d6a1a62f9488fa843f91385369, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  zones: []
+  siteAWeights:
+    attack: 1
+    defense: 1
+    flank: 1
+    scout: 1
+  siteBWeights:
+    attack: 1
+    defense: 1
+    flank: 1
+    scout: 1
+--- !u!4 &1967758780
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1967758778}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 32.249294, y: -11.943807, z: 14.748417}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -529,3 +648,5 @@ SceneRoots:
   - {fileID: 1084369818}
   - {fileID: 1158948890}
   - {fileID: 1694810179}
+  - {fileID: 1967758780}
+  - {fileID: 1250445131}

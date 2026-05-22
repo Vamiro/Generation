@@ -12,16 +12,25 @@ public enum BotRole
 }
 
 /// <summary>
-/// Поведенческий агент бота. Этап A целевой модели:
-///  - HP + урон (бой больше не one-shot);
-///  - ручной поворот к выбранной цели (видно, что бот "целится");
-///  - выбор цели по приоритету (ближайший + кто сам нас видит), а не "последний в цикле";
-///  - периодическое перемещение внутри текущей зоны, если бот не в бою —
-///    чтобы защитники/атакеры не "застывали" в одной случайной точке.
+/// Минималистичный поведенческий агент. Модель боя сознательно упрощена под задачу
+/// ВКР — изучение влияния геометрии карты на winrate (см. Docs/Architecture.md §0).
 ///
-/// Все магические значения (reactionTime, точность, HP, частота reposition) вынесены
-/// в Inspector как [SerializeField] с русскими [Tooltip]. На этапе E они переедут
-/// в ScriptableObject-профиль (BotProfile) — для воспроизводимой автокалибровки (ВКР, разд. 11.1).
+/// Боевой контракт:
+///   • HP = 1 — один успешный выстрел = смерть. Это убирает HP-маневрирование
+///     и делает каждую дуэль интерпретируемой как "кто первым попал".
+///   • После обнаружения врага в LOS копится reactionTime, затем бросок
+///     Random &lt; pHit. pHit зависит ТОЛЬКО от дистанции (distance falloff).
+///   • Никаких ролевых множителей, штрафов за движение цели, cover-bonus
+///     в формуле pHit. Влияние укрытий — через рейкаст LOS (если cover между
+///     стрелком и целью, LOS блокируется и бой не начинается).
+///
+/// Источник модели: Cardamone et al. 2011, Karavolos et al. 2018 — см. §0.
+///
+/// Поведение вне боя:
+///   • Roles + speed по роли (Inspector).
+///   • MoveToZone(zone) → бот едет в случайную точку зоны (GetRandomPointInZone).
+///   • Idle reposition: периодически меняет точку в зоне, чтобы защитники
+///     не "застывали" в одной точке после прибытия.
 /// </summary>
 public class BotComponent : MonoBehaviour
 {
@@ -34,56 +43,57 @@ public class BotComponent : MonoBehaviour
     private BotRole role;
 
     [Header("Бой — реакция и темп стрельбы")]
-    [SerializeField, Min(0f), Tooltip("Задержка между выстрелами (сек). Имитирует реакцию + время прицеливания.")]
+    [SerializeField, Min(0f), Tooltip("Задержка между выстрелами (сек). Имитирует время реакции + прицеливания. Одинакова для всех ботов — это глобальная константа, источник 'преимущества защитника' (см. §0): защитник на месте уже накопил часть таймера к моменту первой встречи.")]
     private float reactionTime = 0.3f;
 
-    [Header("Модель попадания (HitModel)")]
-    [SerializeField, Tooltip("Параметры расчёта p_hit: база, фолл-офф по дистанции, штрафы за укрытие/движение цели, множители по ролям. На этапе E переедут в BotProfile SO.")]
-    private HitModelConfig hitModel = new HitModelConfig();
+    [Header("Модель попадания (5 параметров)")]
+    [SerializeField, Range(0f, 1f), Tooltip("Базовая вероятность попадания на близкой дистанции (≤ fullAccuracyRange) без помех. По умолчанию 0.5 — сохраняет старый баланс. Karavolos 2018: одна цифра, общая для всех.")]
+    private float baseAccuracy = 0.5f;
+    [SerializeField, Min(0f), Tooltip("До какой дистанции (м) точность остаётся максимальной (= baseAccuracy). Дальше — линейный спад.")]
+    private float fullAccuracyRange = 8f;
+    [SerializeField, Min(0.1f), Tooltip("Максимальная значимая дистанция (м). На ней точность падает до minAccuracyAtMaxRange. За ней — остаётся минимум (не уходим в 0).")]
+    private float maxRange = 40f;
+    [SerializeField, Range(0f, 1f), Tooltip("Множитель точности на дистанции maxRange и далее. 0.25 = на длинной дистанции попадание в 4 раза реже.")]
+    private float minAccuracyAtMaxRange = 0.25f;
 
     [Header("Бой — здоровье и урон")]
-    [SerializeField, Min(1), Tooltip("Здоровье бота. При hp ≤ 0 — Die(). Несколько выстрелов вместо мгновенной смерти убирает one-shot и делает бой более реалистичным.")]
-    private int maxHealth = 2;
+    [SerializeField, Min(1), Tooltip("Здоровье бота. По умолчанию 1: один успешный выстрел = смерть (как в Valorant). Каждая дуэль интерпретируется как 'кто первый попал, тот выиграл' — чище для исследования геометрии.")]
+    private int maxHealth = 1;
     [SerializeField, Min(1), Tooltip("Урон за один успешный выстрел.")]
     private int damagePerShot = 1;
 
-    [Header("Прицеливание")]
-    [SerializeField, Min(0f), Tooltip("Скорость поворота тела к цели (град/сек). Пока бот не довернулся — стрелять не разрешено.")]
+    [Header("Прицеливание (визуально + влияние на тайминг)")]
+    [SerializeField, Min(0f), Tooltip("Скорость поворота тела к цели (град/сек). Влияет только визуально: после первого обнаружения врага бот доворачивается, и пока не довернулся — может быть в невыгодной позе. Само 'разрешено стрелять' определяется только reactionTime (упрощено относительно прошлой версии с aimAngleTolerance).")]
     private float aimTurnSpeed = 540f;
-    [SerializeField, Range(0f, 45f), Tooltip("Допуск по углу (градусы), при котором стрельба уже считается \"прицельной\".")]
-    private float aimAngleTolerance = 8f;
 
     [Header("Выбор цели")]
     [SerializeField, Min(0f), Tooltip("Максимальная дистанция, на которой бот вообще замечает врага. 0 = без лимита.")]
     private float sightRange = 60f;
     [SerializeField, Min(0f), Tooltip("Штраф к score за каждый метр дистанции до цели (меньше score = приоритетнее). 0 = дистанция не учитывается.")]
     private float distancePriorityWeight = 1f;
-    [SerializeField, Min(0f), Tooltip("Бонус (вычитается из score) для врагов, которые сами уже целятся в нас.")]
+    [SerializeField, Min(0f), Tooltip("Бонус (вычитается из score) для врагов, которые сами уже целятся в нас. Реагируем первым на самого опасного.")]
     private float threatPriorityBonus = 15f;
 
     [Header("Reposition tick")]
-    [SerializeField, Min(0f), Tooltip("Если бот не в бою (нет видимой цели) и стоит на позиции дольше этого времени — пробует новую точку в той же зоне. 0 = никогда (старое поведение).")]
+    [SerializeField, Min(0f), Tooltip("Если бот не в бою (нет видимой цели) и стоит на позиции дольше этого времени — пробует новую точку в той же зоне. 0 = никогда.")]
     private float repositionDelay = 6f;
     [SerializeField, Range(0f, 1f), Tooltip("Случайный разброс repositionDelay (±%). Чтобы боты не дёргались синхронно.")]
     private float repositionJitter = 0.4f;
 
     [Header("Скорости передвижения по ролям")]
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Attacker (м/с). Применяется в AssignRole. Раньше было захардкожено 5.")]
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Attacker (м/с).")]
     private float attackerSpeed = 5f;
     [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Defender (м/с).")]
     private float defenderSpeed = 5f;
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Flanker (м/с). На уровне атакера по умолчанию.")]
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Flanker (м/с).")]
     private float flankerSpeed = 5f;
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Scout (м/с). Меньше — тише крадётся, дольше выживает на разведке.")]
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Scout (м/с). Меньше — медленнее на разведке.")]
     private float scoutSpeed = 3.5f;
 
     private TeamManager _teamManager;
     private BotComponent _target;
     private float _currentReactionTime;
     private MapZoneComponent _currentZone;
-    // Текущий тактический слот (этап C). Null = бот идёт в случайную точку зоны
-    // (старое поведение, фоллбэк, когда у зоны нет слотов или нет свободных).
-    private TacticalSlot _currentSlot;
     private int _currentHealth;
     private float _idleTimer;
     private float _nextRepositionAt;
@@ -102,7 +112,6 @@ public class BotComponent : MonoBehaviour
     }
 
     // remainingDistance валиден только пока агент на NavMesh, путь рассчитан и не в pendingPath.
-    // Иначе Unity бросает варнинг "GetRemainingDistance can only be called on an active agent...".
     public bool IsOnPosition
     {
         get
@@ -118,8 +127,8 @@ public class BotComponent : MonoBehaviour
         _currentHealth = maxHealth;
         if (agent != null)
         {
-            // Поворот мы контролируем сами, чтобы можно было "целиться" в неподвижного врага,
-            // даже когда NavMeshAgent уже остановился (иначе агент бы не разворачивался).
+            // Поворот мы контролируем сами в FaceTarget(), чтобы бот "целился" в неподвижного
+            // врага даже когда NavMeshAgent уже остановился. Иначе агент не разворачивался бы.
             agent.updateRotation = false;
         }
         ScheduleNextReposition();
@@ -132,18 +141,18 @@ public class BotComponent : MonoBehaviour
 
     private void Update()
     {
-        // Все ссылки проверяем Unity-null-safe (==), потому что MonoBehaviour может
-        // быть "фейково" уничтожен между кадрами.
         if (_teamManager == null) return;
 
         if (_target != null)
         {
-            // Бой: целимся, потом стреляем, как только реакция выкипела и ствол смотрит на врага.
+            // Бой: одновременно доворачиваемся к цели (визуально) и копим reactionTime.
+            // Когда таймер выкипел — Shoot(). Стрелять разрешено независимо от того,
+            // довернулся ли ствол: ось "выстрел" определяется только таймером и LOS.
             _idleTimer = 0f;
             FaceTarget();
 
             _currentReactionTime += Time.deltaTime;
-            if (_currentReactionTime >= reactionTime && IsAimedAtTarget())
+            if (_currentReactionTime >= reactionTime)
             {
                 _currentReactionTime = 0f;
                 Shoot();
@@ -151,10 +160,7 @@ public class BotComponent : MonoBehaviour
         }
         else
         {
-            // Не в бою: копим idleTimer и периодически меняем точку внутри текущей зоны,
-            // чтобы боты не "застывали" в одной случайной точке после первого MoveToZone.
             _currentReactionTime = 0f;
-            HandleIdleFacing();
             HandleIdleReposition();
         }
     }
@@ -172,8 +178,7 @@ public class BotComponent : MonoBehaviour
     }
 
     // Скоринг: чем меньше — тем приоритетнее. База = дистанция * вес,
-    // минус бонус, если враг сам нас сейчас "видит" (его _target == this) —
-    // на такого врага реагируем первым, иначе он успеет выстрелить.
+    // минус бонус, если враг уже целится в нас (его _target == this).
     private BotComponent PickBestTarget(IReadOnlyList<BotComponent> enemyBots)
     {
         BotComponent best = null;
@@ -182,7 +187,6 @@ public class BotComponent : MonoBehaviour
         for (int i = 0; i < enemyBots.Count; i++)
         {
             BotComponent enemy = enemyBots[i];
-            // Destroyed-боты могут лежать в списке между смертью и Bots.Remove(this).
             if (enemy == null) continue;
 
             Vector3 toEnemy = enemy.transform.position - transform.position;
@@ -207,6 +211,9 @@ public class BotComponent : MonoBehaviour
         return best;
     }
 
+    // Geometry-aware видимость: LOS блокируется любым коллайдером на пути —
+    // стенами, cover-блоками. Это и есть единственный механизм работы укрытий
+    // (см. §0). Cover между стрелком и целью → бой не начинается.
     private bool HasLineOfSightTo(BotComponent enemy)
     {
         Vector3 dir = enemy.transform.position - transform.position;
@@ -218,50 +225,11 @@ public class BotComponent : MonoBehaviour
 
     public void MoveToZone(MapZoneComponent zone)
     {
-        // Смена зоны: освобождаем тактический слот в старой зоне, чтобы он не блокировался
-        // на следующий матч / соседей.
-        ReleaseCurrentSlot();
         _currentZone = zone;
         if (zone == null || agent == null || !agent.isOnNavMesh) return;
         agent.SetDestination(zone.GetRandomPointInZone());
         ScheduleNextReposition();
         _idleTimer = 0f;
-    }
-
-    /// <summary>
-    /// Пытается забронировать в указанной зоне тактический слот данного типа и поехать к нему.
-    /// Возвращает true, если слот найден и команда на движение отдана. False — бот не сдвинулся
-    /// (caller должен сделать фоллбэк, например <see cref="MoveToZone"/>). Этап C.
-    /// </summary>
-    public bool TryMoveToTacticalSlot(MapZoneComponent zone, TacticalSlotKind kind)
-    {
-        if (zone == null || agent == null || !agent.isOnNavMesh) return false;
-
-        TacticalSlot slot = zone.TryAcquireSlot(kind, this);
-        if (slot == null) return false;
-
-        ReleaseCurrentSlotExcept(zone); // если был слот в другой зоне — отпускаем
-        _currentZone = zone;
-        _currentSlot = slot;
-        agent.SetDestination(slot.worldPos);
-        ScheduleNextReposition();
-        _idleTimer = 0f;
-        return true;
-    }
-
-    private void ReleaseCurrentSlot()
-    {
-        if (_currentSlot == null) return;
-        if (_currentZone != null) _currentZone.ReleaseSlotOf(this);
-        _currentSlot = null;
-    }
-
-    private void ReleaseCurrentSlotExcept(MapZoneComponent newZone)
-    {
-        if (_currentSlot == null) return;
-        if (_currentZone != null && _currentZone != newZone)
-            _currentZone.ReleaseSlotOf(this);
-        _currentSlot = null;
     }
 
     public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
@@ -270,14 +238,9 @@ public class BotComponent : MonoBehaviour
         SetAgentSpeed(GetSpeedForRole(Role));
 
         if (initialZone != null)
-        {
             MoveToZone(initialZone);
-        }
     }
 
-    // Скорости вынесены в инспектор для калибровки: разная скорость по ролям
-    // меняет тайминги (Scout медленнее = дольше живёт на разведке, Flanker быстрее =
-    // успевает зайти с фланга до того, как защита успеет ротировать).
     private float GetSpeedForRole(BotRole r) => r switch
     {
         BotRole.Attacker => attackerSpeed,
@@ -291,8 +254,7 @@ public class BotComponent : MonoBehaviour
     {
         if (_target == null) return;
 
-        // На случай, если цель ушла за угол между FixedUpdate-ом и выстрелом —
-        // финальная проверка LOS, и тогда сбрасываем цель, чтобы пересчитать в FixedUpdate.
+        // Финальная проверка LOS — цель могла уйти за угол между FixedUpdate и выстрелом.
         if (!HasLineOfSightTo(_target))
         {
             _target = null;
@@ -304,40 +266,30 @@ public class BotComponent : MonoBehaviour
 
         BotComponent victim = _target;
         victim.ReceiveDamage(damagePerShot);
-        // Цель не обнуляем — если жертва ещё жива, продолжаем стрелять по ней в следующих тиках.
         if (victim == null) _target = null;
     }
 
-    // Собирает ShotContext (дистанция в неявном виде через позиции, скорость цели через её
-    // NavMeshAgent, признак "цель в укрытии" — через MapManager.TacticalSlots) и зовёт HitModel.
-    // Вынесено отдельно, чтобы можно было дёшево залогировать/протестировать.
-    //
-    // Этап 1 переработки cover-стека: больше не зависим от MapGenerator/сетки. Источником
-    // знания "цель в укрытии" служат TacticalSlot-точки в зонах — они одни и те же
-    // для процедурной карты (из MapGenerator.BuildTacticalSlots) и для референс-карты
-    // (из ручных TacticalSlotMarker-ов). Бот ведёт себя одинаково в обеих средах.
+    // pHit = baseAccuracy * distanceFalloff(distance).
+    // Никаких ролевых множителей, cover-штрафов, штрафов за движение. Источник модели —
+    // §0 (Karavolos 2018: одна цифра + falloff по range). Cover влияет геометрически
+    // через HasLineOfSightTo — если cover между стрелком и целью, до Shoot() мы не доходим.
     private float ComputeHitChanceAgainst(BotComponent target)
     {
         if (target == null) return 0f;
 
-        float targetSpeed = 0f;
-        if (target.agent != null && target.agent.isOnNavMesh)
-            targetSpeed = target.agent.velocity.magnitude;
-
-        bool inCover = HitModel.IsTargetUsingCover(transform.position, target.transform.position, hitModel);
-
-        var ctx = new HitModel.ShotContext
+        float dist = Vector3.Distance(transform.position, target.transform.position);
+        float falloff;
+        if (maxRange <= fullAccuracyRange || dist <= fullAccuracyRange)
+            falloff = 1f;
+        else
         {
-            ShooterPos    = transform.position,
-            TargetPos     = target.transform.position,
-            ShooterRole   = role,
-            TargetSpeed   = targetSpeed,
-            TargetInCover = inCover,
-        };
-        return HitModel.ComputeHitChance(ctx, hitModel);
+            float t = Mathf.InverseLerp(fullAccuracyRange, maxRange, dist);
+            falloff = Mathf.Lerp(1f, Mathf.Clamp01(minAccuracyAtMaxRange), t);
+        }
+
+        return Mathf.Clamp01(baseAccuracy * falloff);
     }
 
-    // Внешний API: чтобы Этап B (HitModel) мог наносить рассчитанный урон, минуя дефолтный путь.
     public void ReceiveDamage(int amount)
     {
         if (amount <= 0) return;
@@ -357,22 +309,11 @@ public class BotComponent : MonoBehaviour
         transform.rotation = Quaternion.RotateTowards(transform.rotation, desired, aimTurnSpeed * Time.deltaTime);
     }
 
-    private bool IsAimedAtTarget()
-    {
-        if (_target == null) return false;
-        Vector3 dir = _target.transform.position - transform.position;
-        dir.y = 0f;
-        if (dir.sqrMagnitude < 0.0001f) return true;
-        float angle = Quaternion.Angle(transform.rotation, Quaternion.LookRotation(dir));
-        return angle <= aimAngleTolerance;
-    }
-
     private void HandleIdleReposition()
     {
         if (repositionDelay <= 0f) return;
         if (_currentZone == null) return;
         if (agent == null || !agent.isOnNavMesh) return;
-        // Пока бот ещё едет к предыдущей цели — не накручиваем таймер.
         if (!IsOnPosition) { _idleTimer = 0f; return; }
 
         _idleTimer += Time.deltaTime;
@@ -380,40 +321,7 @@ public class BotComponent : MonoBehaviour
 
         _idleTimer = 0f;
         ScheduleNextReposition();
-
-        // Если есть свободный слот того же типа в этой же зоне — пересаживаемся в него
-        // (детерминированный выбор по TryAcquireSlot). Это даёт защитнику "ротацию углов",
-        // а атакеру — смену peek-позиции, не сваливаясь в чистый рандом.
-        if (_currentSlot != null)
-        {
-            TacticalSlotKind kind = _currentSlot.kind;
-            ReleaseCurrentSlot();
-            TacticalSlot next = _currentZone.TryAcquireSlot(kind, this);
-            if (next != null)
-            {
-                _currentSlot = next;
-                agent.SetDestination(next.worldPos);
-                return;
-            }
-        }
-
         agent.SetDestination(_currentZone.GetRandomPointInZone());
-    }
-
-    // Когда бот стоит на тактическом слоте и не в бою — медленно доворачиваемся в facingDir
-    // слота, чтобы "держать угол". Без этого бот пришёл бы в hold-spot и смотрел в случайную
-    // сторону, что выглядело бы плохо и убивало смысл слота.
-    private void HandleIdleFacing()
-    {
-        if (_currentSlot == null) return;
-        if (!IsOnPosition) return;
-
-        Vector3 dir = _currentSlot.facingDir;
-        dir.y = 0f;
-        if (dir.sqrMagnitude < 0.0001f) return;
-
-        Quaternion desired = Quaternion.LookRotation(dir);
-        transform.rotation = Quaternion.RotateTowards(transform.rotation, desired, aimTurnSpeed * Time.deltaTime);
     }
 
     private void ScheduleNextReposition()
@@ -425,11 +333,6 @@ public class BotComponent : MonoBehaviour
 
     private void Die()
     {
-        // Освобождаем тактический слот, чтобы следующий товарищ мог его занять.
-        ReleaseCurrentSlot();
-
-        // Уведомляем оппонента/свою команду — но безопасно: к этому моменту
-        // MatchManager мог уже начать DestroyTeams, и любая ссылка может оказаться Unity-null.
         TeamManager team = _teamManager;
         TeamManager other = team != null ? team.OtherTeam : null;
 
@@ -453,8 +356,6 @@ public class BotComponent : MonoBehaviour
             gm.IncreaseDeathCount();
         }
 
-        // Метрика смерти: сторона определяется по типу TeamManager-а (Attacker vs Defender),
-        // время — текущий runtime матча. Если Collector-а нет — молча пропускаем.
         var stats = MatchStatsCollector.Instance;
         if (stats != null && team != null)
         {
@@ -477,7 +378,7 @@ public class BotComponent : MonoBehaviour
 
     // Лениво создаёт контейнер "DeathMarkers" в корне сцены. Не child мап-генератора —
     // чтобы метки переживали R-регенерацию карты. И НЕ DontDestroyOnLoad —
-    // чтобы не утекали между сценами и не засоряли persistent-иерархию.
+    // чтобы не утекали между сценами.
     private static Transform _deathMarkersRoot;
     private static Transform GetOrCreateDeathMarkersRoot()
     {

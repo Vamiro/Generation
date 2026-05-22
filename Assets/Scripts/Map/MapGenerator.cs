@@ -25,7 +25,7 @@ public partial class MapGenerator : MonoBehaviour
     [Header("Позиционирование зон")]
     [SerializeField, Min(0), Tooltip("Внутренний отступ от границы карты для размещения зон.")] private int innerPadding = 4;
     [SerializeField, Min(0), Tooltip("Максимальный сдвиг каждого спавна по X от центра карты.")] private int spawnHorizontalOffset = 3;
-    [SerializeField, Range(0f, 0.5f), Tooltip("Смещение горизонтальной линии сайтов от центра между спавнами в сторону защитника (доля половины расстояния).")] private float siteLineBiasToDefender = 0.25f;
+    [SerializeField, Range(-0.5f, 0.5f), Tooltip("Смещение линии сайтов от центра между спавнами: >0 — к защитнику, <0 — к атакующему, 0 — по центру (доля половины расстояния spawn↔spawn).")] private float siteLineBiasToDefender = 0.25f;
     [SerializeField, Min(0), Tooltip("Максимальный сдвиг сайта по Z вдоль линии сайтов.")] private int siteVerticalJitter = 2;
     [SerializeField, Min(0), Tooltip("Максимальный сдвиг сайта от края карты вглубь к центру по X (в клетках).")] private int siteCenterDriftMax = 4;
     [SerializeField, Min(1), Tooltip("Множитель размера сайта, определяющий минимальное расстояние от центра карты по X.")] private int siteMinCenterDistanceMultiplier = 2;
@@ -147,18 +147,6 @@ public partial class MapGenerator : MonoBehaviour
         return coverOccupancy[x, z];
     }
 
-    // Размер клетки в мировых координатах. Нужен снаружи (HitModel) для пересчёта world → cell.
-    public float BlockSize => blockSize;
-
-    // Является ли клетка стеной (или вне карты — тоже считаем стеной, чтобы укрытие на краю
-    // карты работало корректно). Используется HitModel.IsTargetUsingCover для проверки
-    // соседей цели: даёт ли стена/край карты сбоку защиту от выстрела.
-    public bool IsCellWall(int x, int z)
-    {
-        if (cellTypes == null) return false;
-        if (!IsInsideMap(x, z)) return true;
-        return cellTypes[x, z] == BlockType.Wall;
-    }
     // Пути main-дорог (заполняется в BuildMainRoutes, читается в PlaceRooms).
     private List<List<Vector2Int>> mainRoadPaths = new();
     // Пути main-дорог по команде — нужны для ответвления Link.
@@ -312,10 +300,6 @@ public partial class MapGenerator : MonoBehaviour
             // После расстановки укрытий пересобираем samplePoints зон, чтобы боты
             // (особенно в SpawnZone) не получили стартовую/случайную точку прямо в укрытии.
             RefreshZoneSamplePointsAfterCovers();
-            // Tactical slots строятся ПОСЛЕ ковров: позиции Hold/Peek привязаны
-            // к coverOccupancy. Без коверов слотов не будет — бот фоллбэкается
-            // на старый GetRandomPointInZone.
-            BuildTacticalSlots();
         }
 
         // Финальный шаг: запекаем NavMesh по геометрии. Делается ПОСЛЕ ВСЕХ stage-ов,

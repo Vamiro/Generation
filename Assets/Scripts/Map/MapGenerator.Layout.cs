@@ -83,9 +83,12 @@ public partial class MapGenerator
 
     int ResolveSiteLineZ()
     {
+        const float maxBias = 0.5f;
         float midZ = (attackerSpawn.y + defenderSpawn.y) * 0.5f;
-        float bias = Mathf.Clamp01(siteLineBiasToDefender);
-        float biasedZ = Mathf.Lerp(midZ, defenderSpawn.y, bias);
+        float bias = Mathf.Clamp(siteLineBiasToDefender, -maxBias, maxBias);
+        float t = Mathf.Abs(bias) / maxBias;
+        float targetZ = bias >= 0f ? defenderSpawn.y : attackerSpawn.y;
+        float biasedZ = Mathf.Lerp(midZ, targetZ, t);
         return Mathf.RoundToInt(biasedZ);
     }
 
