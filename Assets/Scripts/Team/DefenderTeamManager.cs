@@ -5,10 +5,10 @@ using UnityEngine;
 public class DefenderTeamManager : TeamManager
 {
     [Header("Состав команды")]
-    [SerializeField, Min(1), Tooltip("Сколько защитников держат КАЖДЫЙ сайт. Если defense-веса у сайтов в MapManager разные — будет применено как пропорция (см. AssignRoles).")]
-    private int defendersPerSite = 2;
-    [SerializeField, Min(0), Tooltip("Сколько ботов идут в Scout (разведка нейтрали или дороги). Остаток после распределения по сайтам.")]
-    private int scoutCount = 1;
+    [SerializeField, Min(2), Tooltip("Минимум Defender на КАЖДОМ сайте. Лишний бот (если есть) — преимущественно Scout, реже +1 Defender на случайный сайт.")]
+    private int minDefendersPerSite = 2;
+    [SerializeField, Range(0f, 1f), Tooltip("Вероятность, что «лишний» бот станет +1 Defender на сайт (иначе Scout). По умолчанию низкая — в основном Scout.")]
+    private float extraDefenderOnSiteProbability = 0.25f;
 
     [Header("Reposition-тик")]
     [SerializeField, Min(0f), Tooltip("Период reposition-тика (сек). Чаще = более суетливые защитники, реже = пассивные хольдеры.")]
@@ -41,6 +41,8 @@ public class DefenderTeamManager : TeamManager
         PruneDeadBots();
         if (Bots == null || Bots.Count == 0) return;
 
+        PushDefendersTowardSite();
+
         if (!_isMovingToSite) return;
         if (MapManager.Instance == null || MapManager.Instance.SiteZones.Count == 0)
             return;
@@ -67,11 +69,23 @@ public class DefenderTeamManager : TeamManager
         }
 
         var sites = MapManager.Instance.SiteZones;
+        int n = Bots.Count;
+        int baseline = sites.Count * minDefendersPerSite;
 
-        // Распределение защитников по сайтам по defense-весу из MapManager.
-        // Если все веса = 0 → равное распределение по defendersPerSite на каждый сайт.
-        int totalDefenders = Mathf.Max(0, Bots.Count - scoutCount);
-        int[] perSite = ComputeDefendersDistribution(sites, totalDefenders);
+        int scoutsToAssign = 0;
+        int defendersOnSites = n;
+        if (n > baseline)
+        {
+            if (Random.value < extraDefenderOnSiteProbability)
+                defendersOnSites = n;
+            else
+            {
+                scoutsToAssign = n - baseline;
+                defendersOnSites = baseline;
+            }
+        }
+
+        int[] perSite = ComputeDefendersDistribution(sites, defendersOnSites, minDefendersPerSite);
 
         int botIndex = 0;
         for (int siteIdx = 0; siteIdx < sites.Count; siteIdx++)
@@ -89,77 +103,91 @@ public class DefenderTeamManager : TeamManager
             }
         }
 
-        // Scout(ы) — остаток
-        while (botIndex < Bots.Count - 1)
+        for (int s = 0; s < scoutsToAssign && botIndex < Bots.Count; s++, botIndex++)
+            AssignScout(botIndex);
+    }
+
+    private void AssignScout(int index)
+    {
+        if (index < 0 || index >= Bots.Count) return;
+        BotComponent scoutBot = Bots[index];
+        if (scoutBot == null) return;
+
+        scoutBot.AssignRole(BotRole.Scout, initialZone: null);
+
+        bool goNeutral = Random.value < scoutNeutralProbability;
+        if (goNeutral)
         {
-            AssignRoleSafe(botIndex, BotRole.Defender, sites[0]);
-            botIndex++;
+            if (MapManager.Instance.NeutralZones.Count > 0)
+                scoutBot.MoveToZone(MapManager.Instance.NeutralZones[Random.Range(0, MapManager.Instance.NeutralZones.Count)]);
+            else if (MapManager.Instance.RoadZones.Count > 0)
+                scoutBot.MoveToZone(MapManager.Instance.RoadZones[Random.Range(0, MapManager.Instance.RoadZones.Count)]);
         }
-
-        while (botIndex < Bots.Count)
+        else if (MapManager.Instance.RoadZones.Count > 0)
         {
-            BotComponent scoutBot = Bots[botIndex];
-            if (scoutBot != null)
-            {
-                scoutBot.AssignRole(BotRole.Scout, initialZone: null);
-
-                bool goNeutral = Random.value < scoutNeutralProbability;
-                if (goNeutral)
-                {
-                    if (MapManager.Instance.NeutralZones.Count > 0)
-                        scoutBot.MoveToZone(MapManager.Instance.NeutralZones[Random.Range(0, MapManager.Instance.NeutralZones.Count)]);
-                    else if (MapManager.Instance.RoadZones.Count > 0)
-                        scoutBot.MoveToZone(MapManager.Instance.RoadZones[Random.Range(0, MapManager.Instance.RoadZones.Count)]);
-                }
-                else
-                {
-                    if (MapManager.Instance.RoadZones.Count > 0)
-                        scoutBot.MoveToZone(MapManager.Instance.RoadZones[Random.Range(0, MapManager.Instance.RoadZones.Count)]);
-                }
-            }
-            botIndex++;
+            scoutBot.MoveToZone(MapManager.Instance.RoadZones[Random.Range(0, MapManager.Instance.RoadZones.Count)]);
         }
     }
 
-    // Распределение N защитников по списку сайтов пропорционально их defense-весу (из MapManager).
-    // Если все веса 0 — поровну (с округлением; остаток уходит первому сайту).
-    private int[] ComputeDefendersDistribution(IList<SiteZoneComponent> sites, int totalDefenders)
+    // Сначала minPerSite на каждый сайт, остаток — по defense-весам (largest-remainder).
+    private int[] ComputeDefendersDistribution(
+        IList<SiteZoneComponent> sites,
+        int totalDefenders,
+        int minPerSite)
     {
-        int[] result = new int[sites.Count];
-        if (sites.Count == 0 || totalDefenders <= 0) return result;
+        int siteCount = sites.Count;
+        int[] result = new int[siteCount];
+        if (siteCount == 0 || totalDefenders <= 0) return result;
+
+        int baseline = siteCount * minPerSite;
+        if (totalDefenders < baseline)
+        {
+            for (int i = 0; i < siteCount; i++)
+                result[i] = totalDefenders / siteCount;
+            int rem = totalDefenders % siteCount;
+            for (int i = 0; i < rem; i++)
+                result[i]++;
+            return result;
+        }
+
+        for (int i = 0; i < siteCount; i++)
+            result[i] = minPerSite;
+
+        int extra = totalDefenders - baseline;
+        if (extra <= 0) return result;
 
         float totalWeight = 0f;
-        for (int i = 0; i < sites.Count; i++)
+        for (int i = 0; i < siteCount; i++)
             totalWeight += Mathf.Max(0f, sites[i].GetWeight(BotRole.Defender));
 
         if (totalWeight <= 0f)
         {
-            int perSite = Mathf.Min(defendersPerSite, totalDefenders / sites.Count);
-            for (int i = 0; i < sites.Count; i++) result[i] = perSite;
-            int leftover = totalDefenders - perSite * sites.Count;
-            if (leftover > 0) result[0] += leftover;
+            for (int e = 0; e < extra; e++)
+                result[e % siteCount]++;
             return result;
         }
 
-        float[] exact = new float[sites.Count];
+        float[] exact = new float[siteCount];
         int assigned = 0;
-        for (int i = 0; i < sites.Count; i++)
+        for (int i = 0; i < siteCount; i++)
         {
             float w = Mathf.Max(0f, sites[i].GetWeight(BotRole.Defender));
-            exact[i] = totalDefenders * (w / totalWeight);
-            result[i] = Mathf.FloorToInt(exact[i]);
-            assigned += result[i];
+            exact[i] = extra * (w / totalWeight);
+            int add = Mathf.FloorToInt(exact[i]);
+            result[i] += add;
+            assigned += add;
         }
 
-        // Остатки раздаём сайтам с наибольшей дробной частью (стандартный largest-remainder method).
-        int leftoverCount = totalDefenders - assigned;
-        float[] frac = new float[sites.Count];
-        for (int i = 0; i < sites.Count; i++) frac[i] = exact[i] - Mathf.FloorToInt(exact[i]);
+        int leftoverCount = extra - assigned;
+        float[] frac = new float[siteCount];
+        for (int i = 0; i < siteCount; i++)
+            frac[i] = exact[i] - Mathf.FloorToInt(exact[i]);
+
         while (leftoverCount > 0)
         {
             int bestIdx = 0;
             float bestFrac = -1f;
-            for (int i = 0; i < sites.Count; i++)
+            for (int i = 0; i < siteCount; i++)
                 if (frac[i] > bestFrac) { bestFrac = frac[i]; bestIdx = i; }
             result[bestIdx]++;
             frac[bestIdx] -= 1f;
@@ -207,7 +235,32 @@ public class DefenderTeamManager : TeamManager
             return;
         }
 
-        bot.AssignRole(BotRole.Defender, initialZone: main);
+        bot.AssignRole(BotRole.Defender, main, MarchGoal(siteZone));
+    }
+
+    // Симметрия с PushMainAttackersTowardSite: конец дороги к сайту → занять Site.
+    private void PushDefendersTowardSite()
+    {
+        for (int i = 0; i < Bots.Count; i++)
+        {
+            BotComponent bot = Bots[i];
+            if (bot == null || bot.Role != BotRole.Defender) continue;
+
+            if (bot.CurrentZone is not RoadZoneComponent road || road.roadToSite == null)
+                continue;
+
+            SiteZoneComponent site = road.roadToSite;
+            if (bot.IsInsideZone(site))
+            {
+                bot.HoldZone(site);
+                continue;
+            }
+
+            if (bot.CurrentZone == site) continue;
+
+            if (bot.IsOnPosition)
+                bot.MoveToZone(site, MarchGoal(site));
+        }
     }
 
     private void TryRepositionDefenders(int start, int end, MapZoneComponent siteZone)
@@ -227,9 +280,12 @@ public class DefenderTeamManager : TeamManager
             MapZoneComponent road = FindPreferredRoad(siteZone, pickType);
             if (road == null) continue;
 
-            bot.MoveToZone(road);
+            bot.MoveToZone(road, MarchGoal(siteZone));
         }
     }
+
+    private static Vector3 MarchGoal(MapZoneComponent zone) =>
+        zone != null ? zone.transform.position : Vector3.zero;
 
     private MapZoneComponent FindPreferredRoad(MapZoneComponent siteZone, RoadType preferredType)
     {

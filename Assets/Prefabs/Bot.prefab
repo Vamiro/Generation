@@ -14,7 +14,7 @@ GameObject:
   - component: {fileID: 6296327327350332178}
   - component: {fileID: 5907721025055010368}
   - component: {fileID: 1539800631842923702}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Bot
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -99,7 +99,7 @@ CapsuleCollider:
     m_Bits: 0
   m_ExcludeLayers:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 64
   m_LayerOverridePriority: 0
   m_IsTrigger: 0
   m_ProvidesContacts: 0
@@ -144,7 +144,25 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   agent: {fileID: 5907721025055010368}
-  reactionTime: 0.3
-  chanceToShoot: 0.5
   deathEffect: {fileID: 5604489583554041509, guid: 28d8d084fe8dd402bbc0ca7f3fbc5342, type: 3}
   role: 0
+  reactionTime: 0.3
+  baseAccuracy: 0.5
+  fullAccuracyRange: 8
+  maxRange: 40
+  minAccuracyAtMaxRange: 0.25
+  siteHoldAccuracyMultiplier: 1.2
+  maxHealth: 1
+  damagePerShot: 1
+  aimTurnSpeed: 540
+  sightRange: 60
+  distancePriorityWeight: 1
+  threatPriorityBonus: 15
+  repositionDelay: 6
+  repositionJitter: 0.4
+  attackerSpeed: 5
+  defenderSpeed: 5
+  flankerSpeed: 5
+  scoutSpeed: 3.5
+  arrivalRadius: 2
+  roadWaypointStep: 6

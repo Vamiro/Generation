@@ -28,7 +28,8 @@ public enum BotRole
 ///
 /// Поведение вне боя:
 ///   • Roles + speed по роли (Inspector).
-///   • MoveToZone(zone) → бот едет в случайную точку зоны (GetRandomPointInZone).
+///   • MoveToZone(zone) → точка в зоне; на дороге с goal — от ближайшей точки по waypoints к сайту.
+///   • IsOnPosition — в радиусе arrivalRadius от текущей цели, не точное совпадение с клеткой.
 ///   • Idle reposition: периодически меняет точку в зоне, чтобы защитники
 ///     не "застывали" в одной точке после прибытия.
 /// </summary>
@@ -55,6 +56,10 @@ public class BotComponent : MonoBehaviour
     private float maxRange = 40f;
     [SerializeField, Range(0f, 1f), Tooltip("Множитель точности на дистанции maxRange и далее. 0.25 = на длинной дистанции попадание в 4 раза реже.")]
     private float minAccuracyAtMaxRange = 0.25f;
+    [SerializeField, Min(1f), Tooltip("Множитель pHit при реальном холде на Site (стоит, не бежит к точке). Не срабатывает у бегущих в зону — только у остановившихся / HoldZone.")]
+    private float siteHoldAccuracyMultiplier = 1.2f;
+    [SerializeField, Min(0f), Tooltip("Считаем «стоит на месте» для hold-бонуса, если скорость NavMeshAgent ниже (м/с).")]
+    private float holdStationarySpeed = 0.15f;
 
     [Header("Бой — здоровье и урон")]
     [SerializeField, Min(1), Tooltip("Здоровье бота. По умолчанию 1: один успешный выстрел = смерть (как в Valorant). Каждая дуэль интерпретируется как 'кто первый попал, тот выиграл' — чище для исследования геометрии.")]
@@ -80,23 +85,42 @@ public class BotComponent : MonoBehaviour
     [SerializeField, Range(0f, 1f), Tooltip("Случайный разброс repositionDelay (±%). Чтобы боты не дёргались синхронно.")]
     private float repositionJitter = 0.4f;
 
-    [Header("Скорости передвижения по ролям")]
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Attacker (м/с).")]
-    private float attackerSpeed = 5f;
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Defender (м/с).")]
-    private float defenderSpeed = 5f;
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Flanker (м/с).")]
-    private float flankerSpeed = 5f;
-    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для роли Scout (м/с). Меньше — медленнее на разведке.")]
+    [Header("Hold на Site — лёгкое перемещение")]
+    [SerializeField, Min(0f), Tooltip("Период (сек) между попытками сменить точку внутри Site при hold. 0 = никогда.")]
+    private float siteHoldRepositionDelay = 12f;
+    [SerializeField, Range(0f, 1f), Tooltip("Вероятность реально пойти в новую точку Site после тика (иначе остаётся на месте).")]
+    private float siteHoldRepositionChance = 0.35f;
+    [SerializeField, Range(0f, 1f), Tooltip("Разброс siteHoldRepositionDelay (±%).")]
+    private float siteHoldRepositionJitter = 0.3f;
+
+    [Header("Скорости передвижения")]
+    [SerializeField, Min(0f), Tooltip("Скорость NavMeshAgent для Attacker/Defender/Flanker — одинакова у обеих сторон (баланс только через тактику команд).")]
+    private float combatMoveSpeed = 5f;
+    [SerializeField, Min(0f), Tooltip("Скорость Scout (м/с). Только тактическая роль разведки.")]
     private float scoutSpeed = 3.5f;
+
+    [Header("Навигация")]
+    [SerializeField, Min(0.5f), Tooltip("Точка маршрута считается достигнутой, если бот в этом радиусе (м) от неё — не нужно вставать точно в центр клетки.")]
+    private float arrivalRadius = 2f;
+    [SerializeField, Min(1f), Tooltip("Шаг между промежуточными точками при движении по дороге (м).")]
+    private float roadWaypointStep = 6f;
+    [SerializeField, Min(1f), Tooltip("Радиус (м) выбора стартовой точки на дороге вокруг бота — разносит группу, не одна «ближайшая» sample.")]
+    private float roadEntryPickRadius = 5f;
+    [SerializeField, Range(0.05f, 1f), Tooltip("Доля «передних» sample на дороге для финиша к сайту (случайная среди них, не одна ближайшая к цели).")]
+    private float roadForwardPickPortion = 0.4f;
 
     private TeamManager _teamManager;
     private BotComponent _target;
     private float _currentReactionTime;
     private MapZoneComponent _currentZone;
+    private Vector3? _zoneMoveGoal;
     private int _currentHealth;
     private float _idleTimer;
     private float _nextRepositionAt;
+    private Vector3 _navDestination;
+    private List<Vector3> _waypoints;
+    private int _waypointIndex;
+    private bool _explicitSiteHold;
 
     public BotRole Role
     {
@@ -105,26 +129,31 @@ public class BotComponent : MonoBehaviour
     }
 
     public BotComponent CurrentTarget => _target;
+    public MapZoneComponent CurrentZone => _currentZone;
+
+    public bool IsInsideZone(MapZoneComponent zone) =>
+        zone != null && zone.ContainsWorldPointXZ(transform.position);
 
     public void SetAgentSpeed(float speed)
     {
         if (agent != null) agent.speed = speed;
     }
 
-    // remainingDistance валиден только пока агент на NavMesh, путь рассчитан и не в pendingPath.
+    // Достигли текущей цели NavMesh: близко к _navDestination или remainingDistance ≤ arrivalRadius.
     public bool IsOnPosition
     {
         get
         {
             if (agent == null || !agent.isOnNavMesh) return false;
-            if (agent.pathPending) return false;
-            return agent.remainingDistance < 0.01f;
+            if (_waypoints != null && _waypointIndex < _waypoints.Count - 1) return false;
+            return HasReachedNavDestination();
         }
     }
 
     private void Awake()
     {
         _currentHealth = maxHealth;
+        _navDestination = transform.position;
         if (agent != null)
         {
             // Поворот мы контролируем сами в FaceTarget(), чтобы бот "целился" в неподвижного
@@ -161,6 +190,8 @@ public class BotComponent : MonoBehaviour
         else
         {
             _currentReactionTime = 0f;
+            TryEarlySiteHold();
+            TickRoadWaypoints();
             HandleIdleReposition();
         }
     }
@@ -223,32 +254,193 @@ public class BotComponent : MonoBehaviour
         return hit.collider.gameObject == enemy.gameObject;
     }
 
-    public void MoveToZone(MapZoneComponent zone)
+    // Удержание Site: сразу случайная точка внутри зоны (не стоим на входе), дальше — редкий siteHoldReposition.
+    public void HoldZone(MapZoneComponent zone)
     {
+        if (zone == null) return;
+
         _currentZone = zone;
+        _zoneMoveGoal = null;
+        _waypoints = null;
+        _waypointIndex = 0;
+        _idleTimer = 0f;
+
+        if (agent == null || !agent.isOnNavMesh) return;
+
+        bool inside = zone.ContainsWorldPointXZ(transform.position);
+        _explicitSiteHold = inside;
+
+        if (inside)
+        {
+            SetNavDestination(zone.GetRandomPointInZone());
+            ScheduleNextSiteHoldReposition();
+        }
+        else
+        {
+            _explicitSiteHold = false;
+            SetNavDestination(zone.GetRandomPointInZone());
+            ScheduleNextReposition();
+        }
+    }
+
+    public void MoveToZone(MapZoneComponent zone, Vector3? towardGoal = null)
+    {
         if (zone == null || agent == null || !agent.isOnNavMesh) return;
-        agent.SetDestination(zone.GetRandomPointInZone());
+
+        if (towardGoal.HasValue && TryEarlySiteHoldOnMarch()) return;
+
+        _explicitSiteHold = false;
+        _currentZone = zone;
+        _zoneMoveGoal = towardGoal;
+        _waypoints = null;
+        _waypointIndex = 0;
+
+        if (zone is SiteZoneComponent && IsInsideZone(zone))
+        {
+            HoldZone(zone);
+            return;
+        }
+
+        if (zone is RoadZoneComponent && towardGoal.HasValue)
+            BeginRoadMove(zone, towardGoal.Value);
+        else
+            SetNavDestination(ResolveDestinationInZone(zone));
+
         ScheduleNextReposition();
         _idleTimer = 0f;
     }
 
-    public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null)
+    private void BeginRoadMove(MapZoneComponent road, Vector3 goalWorld)
+    {
+        _waypoints = road.GetWaypointsToward(
+            transform.position,
+            goalWorld,
+            roadWaypointStep,
+            roadEntryPickRadius,
+            roadForwardPickPortion);
+        TrimLeadingPassedWaypoints();
+
+        if (_waypoints == null || _waypoints.Count == 0)
+        {
+            SetNavDestination(road.GetRandomForwardPoint(goalWorld, roadForwardPickPortion));
+            return;
+        }
+
+        _waypointIndex = 0;
+        SetNavDestination(_waypoints[0]);
+    }
+
+    private void TrimLeadingPassedWaypoints()
+    {
+        if (_waypoints == null) return;
+
+        while (_waypoints.Count > 1
+               && HorizontalSqrDistance(transform.position, _waypoints[0]) <= arrivalRadius * arrivalRadius)
+            _waypoints.RemoveAt(0);
+    }
+
+    // Зашли на Site, к которому шли по дороге (goal) — hold, как у атаки, так и у защиты.
+    private void TryEarlySiteHold()
+    {
+        TryEarlySiteHoldOnMarch();
+    }
+
+    private bool TryEarlySiteHoldOnMarch()
+    {
+        if (!_zoneMoveGoal.HasValue) return false;
+
+        SiteZoneComponent site = ResolveSiteForMarchGoal(_zoneMoveGoal.Value);
+        if (site == null || !IsInsideZone(site)) return false;
+
+        HoldZone(site);
+        return true;
+    }
+
+    private static SiteZoneComponent ResolveSiteForMarchGoal(Vector3 goalWorld)
+    {
+        MapManager map = MapManager.Instance;
+        if (map == null) return null;
+
+        SiteZoneComponent best = null;
+        float bestSq = float.PositiveInfinity;
+        var sites = map.SiteZones;
+        for (int i = 0; i < sites.Count; i++)
+        {
+            SiteZoneComponent site = sites[i];
+            if (site == null) continue;
+            float sq = HorizontalSqrDistance(site.transform.position, goalWorld);
+            if (sq < bestSq)
+            {
+                bestSq = sq;
+                best = site;
+            }
+        }
+        return best;
+    }
+
+    private void SetNavDestination(Vector3 worldPoint)
+    {
+        _navDestination = worldPoint;
+        agent.SetDestination(worldPoint);
+    }
+
+    private bool HasReachedNavDestination()
+    {
+        if (agent.pathPending) return false;
+
+        if (HorizontalSqrDistance(transform.position, _navDestination) <= arrivalRadius * arrivalRadius)
+            return true;
+
+        return !float.IsPositiveInfinity(agent.remainingDistance)
+               && agent.remainingDistance <= arrivalRadius;
+    }
+
+    private void TickRoadWaypoints()
+    {
+        if (_waypoints == null || _waypoints.Count == 0) return;
+        if (_waypointIndex >= _waypoints.Count - 1) return;
+        if (!HasReachedNavDestination()) return;
+
+        _waypointIndex++;
+        SetNavDestination(_waypoints[_waypointIndex]);
+        _idleTimer = 0f;
+    }
+
+    private static float HorizontalSqrDistance(Vector3 a, Vector3 b)
+    {
+        float dx = a.x - b.x;
+        float dz = a.z - b.z;
+        return dx * dx + dz * dz;
+    }
+
+    private Vector3 ResolveDestinationInZone(MapZoneComponent zone)
+    {
+        if (zone == null) return transform.position;
+        return _zoneMoveGoal.HasValue
+            ? zone.GetPointToward(_zoneMoveGoal.Value)
+            : zone.GetRandomPointInZone();
+    }
+
+    public void AssignRole(BotRole newRole, MapZoneComponent initialZone = null, Vector3? towardGoal = null)
     {
         Role = newRole;
         SetAgentSpeed(GetSpeedForRole(Role));
 
-        if (initialZone != null)
+        if (initialZone == null) return;
+
+        if (initialZone.ContainsWorldPointXZ(transform.position))
+            HoldZone(initialZone);
+        else if (initialZone is SiteZoneComponent)
             MoveToZone(initialZone);
+        else
+            MoveToZone(initialZone, towardGoal ?? MarchGoalForZone(initialZone));
     }
 
-    private float GetSpeedForRole(BotRole r) => r switch
-    {
-        BotRole.Attacker => attackerSpeed,
-        BotRole.Defender => defenderSpeed,
-        BotRole.Flanker  => flankerSpeed,
-        BotRole.Scout    => scoutSpeed,
-        _ => attackerSpeed,
-    };
+    private static Vector3? MarchGoalForZone(MapZoneComponent zone) =>
+        zone != null ? zone.transform.position : null;
+
+    private float GetSpeedForRole(BotRole r) =>
+        r == BotRole.Scout ? scoutSpeed : combatMoveSpeed;
 
     private void Shoot()
     {
@@ -287,7 +479,46 @@ public class BotComponent : MonoBehaviour
             falloff = Mathf.Lerp(1f, Mathf.Clamp01(minAccuracyAtMaxRange), t);
         }
 
-        return Mathf.Clamp01(baseAccuracy * falloff);
+        float pHit = baseAccuracy * falloff;
+        if (HasSiteHoldAdvantage())
+            pHit *= siteHoldAccuracyMultiplier;
+        return Mathf.Clamp01(pHit);
+    }
+
+    // Hold-бонус только если бот реально стоит в Site, а не «проезжает» в радиусе arrivalRadius.
+    private bool HasSiteHoldAdvantage()
+    {
+        if (!IsInsideAnySite()) return false;
+        if (!IsStationaryForHold()) return false;
+
+        if (_explicitSiteHold) return true;
+
+        return IsOnPosition;
+    }
+
+    private bool IsInsideAnySite()
+    {
+        if (_currentZone is SiteZoneComponent site && IsInsideZone(site))
+            return true;
+
+        MapManager map = MapManager.Instance;
+        if (map == null) return false;
+
+        Vector3 pos = transform.position;
+        var sites = map.SiteZones;
+        for (int i = 0; i < sites.Count; i++)
+        {
+            SiteZoneComponent s = sites[i];
+            if (s != null && s.ContainsWorldPointXZ(pos))
+                return true;
+        }
+        return false;
+    }
+
+    private bool IsStationaryForHold()
+    {
+        if (agent == null) return true;
+        return agent.velocity.sqrMagnitude <= holdStationarySpeed * holdStationarySpeed;
     }
 
     public void ReceiveDamage(int amount)
@@ -311,6 +542,12 @@ public class BotComponent : MonoBehaviour
 
     private void HandleIdleReposition()
     {
+        if (IsSiteHolding())
+        {
+            HandleSiteHoldReposition();
+            return;
+        }
+
         if (repositionDelay <= 0f) return;
         if (_currentZone == null) return;
         if (agent == null || !agent.isOnNavMesh) return;
@@ -321,7 +558,62 @@ public class BotComponent : MonoBehaviour
 
         _idleTimer = 0f;
         ScheduleNextReposition();
-        agent.SetDestination(_currentZone.GetRandomPointInZone());
+
+        if (_currentZone is RoadZoneComponent && _zoneMoveGoal.HasValue)
+            BeginRoadMove(_currentZone, _zoneMoveGoal.Value);
+        else
+        {
+            _waypoints = null;
+            _waypointIndex = 0;
+            SetNavDestination(ResolveDestinationInZone(_currentZone));
+        }
+    }
+
+    private bool IsSiteHolding()
+    {
+        if (!IsInsideAnySite()) return false;
+        if (_explicitSiteHold) return true;
+        return _currentZone is SiteZoneComponent;
+    }
+
+    private void HandleSiteHoldReposition()
+    {
+        if (siteHoldRepositionDelay <= 0f) return;
+        if (agent == null || !agent.isOnNavMesh) return;
+        if (!IsOnPosition) { _idleTimer = 0f; return; }
+
+        _idleTimer += Time.deltaTime;
+        if (_idleTimer < _nextRepositionAt) return;
+
+        _idleTimer = 0f;
+        ScheduleNextSiteHoldReposition();
+
+        if (Random.value > siteHoldRepositionChance) return;
+
+        MapZoneComponent site = ResolveSiteZoneForHold();
+        if (site == null) return;
+
+        _explicitSiteHold = true;
+        SetNavDestination(site.GetRandomPointInZone());
+    }
+
+    private MapZoneComponent ResolveSiteZoneForHold()
+    {
+        if (_currentZone is SiteZoneComponent siteZone)
+            return siteZone;
+
+        MapManager map = MapManager.Instance;
+        if (map == null) return null;
+
+        Vector3 pos = transform.position;
+        var sites = map.SiteZones;
+        for (int i = 0; i < sites.Count; i++)
+        {
+            SiteZoneComponent s = sites[i];
+            if (s != null && s.ContainsWorldPointXZ(pos))
+                return s;
+        }
+        return null;
     }
 
     private void ScheduleNextReposition()
@@ -329,6 +621,13 @@ public class BotComponent : MonoBehaviour
         float jitter = Mathf.Clamp01(repositionJitter);
         float k = 1f + Random.Range(-jitter, jitter);
         _nextRepositionAt = Mathf.Max(0.1f, repositionDelay * k);
+    }
+
+    private void ScheduleNextSiteHoldReposition()
+    {
+        float jitter = Mathf.Clamp01(siteHoldRepositionJitter);
+        float k = 1f + Random.Range(-jitter, jitter);
+        _nextRepositionAt = Mathf.Max(0.1f, siteHoldRepositionDelay * k);
     }
 
     private void Die()

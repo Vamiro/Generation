@@ -1,29 +1,30 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
 public class AttackerTeamManager : TeamManager
 {
-    [Header("Состав команды (сумма должна равняться botsPerTeam у MatchManager)")]
-    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Attacker (идут по Main к сайту). Раньше было захардкожено 2.")]
-    private int attackerCount = 2;
-    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Flanker (идут по Link для обхода).")]
-    private int flankerCount = 2;
-    [SerializeField, Min(0), Tooltip("Сколько ботов получают роль Scout (разведка: нейтраль или случайная дорога).")]
-    private int scoutCount = 1;
+    [Header("Состав команды (botsPerTeam у MatchManager)")]
+    [SerializeField, Min(2), Tooltip("Минимум Attacker (Main) на матч. Остальные боты случайно делятся между Flanker и Scout.")]
+    private int minAttackerCount = 2;
+
+    private int _rolledFlankerCount;
+    private int _rolledScoutCount;
 
     [Header("Тактика")]
     [SerializeField, Min(0), Tooltip("Разница в численности (защитников минус атакующих), при которой команда меняет атакуемый сайт. Меньше = чаще ротируют.")]
     private int rotationThreshold = 2;
-    [SerializeField, Range(0f, 1f), Tooltip("Вероятность, что Scout пойдёт в нейтральную зону (vs случайная дорога). 0.5 = поровну (старое поведение).")]
-    private float scoutNeutralProbability = 0.5f;
+    [SerializeField, Min(0f), Tooltip("Если спавн атакеров ближе к сайту ≤ этого расстояния (м) — идут сразу на сайт, без main/link.")]
+    private float directToSiteDistance = 35f;
 
     private bool _isRotated = false;
-    private bool _isMovingToSite = false;
+    private bool _flankersCommitted = false;
+    private Vector3 _attackerSpawnCenter;
 
     public override void Start()
     {
         base.Start();
+        CacheAttackerSpawnCenter();
         AssignRoles();
         ChooseTargetSite();
     }
@@ -37,26 +38,36 @@ public class AttackerTeamManager : TeamManager
         if (Bots == null || Bots.Count == 0) return;
         if (OtherTeam == null) return;
         CheckForRotation();
-        CheckOnPosition();
+        PushMainAttackersTowardSite();
+        CheckFlankersOnLink();
     }
 
     private void AssignRoles()
     {
-        // Раскладываем роли по списку Bots в порядке: Attacker, Flanker, Scout.
-        // Хвост, если он остался (Bots.Count > сумма заданных), получает роль Attacker
-        // как самую "нейтральную" — лучше, чем оставить без роли.
-        int index = 0;
-        for (int i = 0; i < attackerCount; i++, index++)
-            AssignRoleSafe(index, BotRole.Attacker);
-        for (int i = 0; i < flankerCount; i++, index++)
-            AssignRoleSafe(index, BotRole.Flanker);
-        for (int i = 0; i < scoutCount; i++, index++)
-            AssignRoleSafe(index, BotRole.Scout);
+        int n = Bots.Count;
+        int attackers = Mathf.Clamp(minAttackerCount, 2, Mathf.Max(2, n));
+        int pool = Mathf.Max(0, n - attackers);
 
-        while (index < Bots.Count)
+        _rolledScoutCount = Random.Range(0, pool + 1);
+        _rolledFlankerCount = pool - _rolledScoutCount;
+
+        var roles = new List<BotRole>(n);
+        for (int i = 0; i < attackers; i++) roles.Add(BotRole.Attacker);
+        for (int i = 0; i < _rolledFlankerCount; i++) roles.Add(BotRole.Flanker);
+        for (int i = 0; i < _rolledScoutCount; i++) roles.Add(BotRole.Scout);
+
+        ShuffleRoles(roles);
+
+        for (int i = 0; i < n; i++)
+            AssignRoleSafe(i, roles[i]);
+    }
+
+    private static void ShuffleRoles(List<BotRole> roles)
+    {
+        for (int i = roles.Count - 1; i > 0; i--)
         {
-            AssignRoleSafe(index, BotRole.Attacker);
-            index++;
+            int j = Random.Range(0, i + 1);
+            (roles[i], roles[j]) = (roles[j], roles[i]);
         }
     }
 
@@ -81,35 +92,9 @@ public class AttackerTeamManager : TeamManager
             // Выбираем SiteVolume по весу из MapManager.siteAWeights/siteBWeights (если все веса 0 — uniform random).
             targetSite = PickWeightedSite(MapManager.Instance.SiteZones, BotRole.Attacker);
 
-            // Назначаем цели
-            foreach (var bot in Bots)
-            {
-                if (bot == null) continue;
-                if (bot.Role == BotRole.Attacker)
-                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Main) ?? targetSite);
+            SendBotsTowardTargetSite();
 
-                if (bot.Role == BotRole.Flanker)
-                    bot.MoveToZone(FindPreferredRoad(targetSite, RoadType.Link) ?? targetSite);
-
-                if (bot.Role == BotRole.Scout)
-                {
-                    bool goNeutral = Random.value < scoutNeutralProbability;
-                    if (goNeutral)
-                    {
-                        var neutralZones = MapManager.Instance.NeutralZones;
-                        if (neutralZones.Count > 0)
-                            bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
-                    }
-                    else
-                    {
-                        var roadZones = MapManager.Instance.RoadZones;
-                        if (roadZones.Count > 0)
-                            bot.MoveToZone(roadZones[Random.Range(0, roadZones.Count)]);
-                    }
-                }
-            }
-        
-            _isMovingToSite = false;
+            _flankersCommitted = false;
         }
         else
         {
@@ -120,18 +105,12 @@ public class AttackerTeamManager : TeamManager
 
             targetSite = MapManager.Instance.SiteZones[(index + 1) % MapManager.Instance.SiteZones.Count];
             
-            foreach (var bot in Bots)
-            {
-                if (bot == null) continue;
-                var neutralZones = MapManager.Instance.NeutralZones;
-                if (neutralZones.Count > 0)
-                    bot.MoveToZone(neutralZones[Random.Range(0, neutralZones.Count)]);
-            }
+            SendBotsTowardTargetSite();
 
             if (OtherTeam != null)
                 OtherTeam.NotifyDefendersAboutRotate(targetSite);
-            
-            _isMovingToSite = false;
+
+            _flankersCommitted = false;
         }
     }
 
@@ -148,6 +127,7 @@ public class AttackerTeamManager : TeamManager
                 if (enemyBots[i] != null) enemyAlive++;
         }
 
+        if (HasCapturedTargetSite()) return;
         if (enemyAlive - Bots.Count < rotationThreshold || _isRotated) return;
         _isRotated = true;
         foreach (var bot in Bots)
@@ -157,38 +137,162 @@ public class AttackerTeamManager : TeamManager
         ChooseTargetSite();
     }
 
-    private void CheckOnPosition()
+    // Main: занять сайт сразу (конец main / уже на site). Не ждём фланкеров.
+    private void PushMainAttackersTowardSite()
     {
-        if (_isMovingToSite || targetSite == null) return;
+        if (targetSite == null) return;
 
         for (int i = 0; i < Bots.Count; i++)
         {
             BotComponent bot = Bots[i];
-            if (bot == null) return; // ещё не зачищено — пропустим этот кадр
-            if (!bot.IsOnPosition) return;
+            if (bot == null || bot.Role != BotRole.Attacker) continue;
+
+            if (bot.IsInsideZone(targetSite))
+            {
+                bot.HoldZone(targetSite);
+                continue;
+            }
+
+            if (bot.CurrentZone == targetSite)
+                continue;
+
+            if (ShouldGoDirectToSite())
+            {
+                bot.MoveToZone(targetSite);
+                continue;
+            }
+
+            if (bot.IsOnPosition && IsOnMainRoadToTarget(bot))
+                bot.MoveToZone(targetSite);
+        }
+    }
+
+    // Если есть фланкеры — ждём только их на Link; затем пускаем на сайт.
+    private void CheckFlankersOnLink()
+    {
+        if (targetSite == null || _flankersCommitted) return;
+        if (_rolledFlankerCount <= 0) return;
+        if (!AllFlankersOnLink()) return;
+
+        _flankersCommitted = true;
+        for (int i = 0; i < Bots.Count; i++)
+        {
+            BotComponent bot = Bots[i];
+            if (bot == null || bot.Role != BotRole.Flanker) continue;
+
+            if (bot.IsInsideZone(targetSite))
+                bot.HoldZone(targetSite);
+            else
+                bot.MoveToZone(targetSite);
+        }
+    }
+
+    // Сайт «занят»: хотя бы один Attacker/Flanker внутри targetSite — ротации нет.
+    private bool HasCapturedTargetSite()
+    {
+        if (targetSite == null) return false;
+
+        for (int i = 0; i < Bots.Count; i++)
+        {
+            BotComponent bot = Bots[i];
+            if (bot == null) continue;
+            if (bot.Role is not (BotRole.Attacker or BotRole.Flanker)) continue;
+            if (bot.IsInsideZone(targetSite)) return true;
+        }
+        return false;
+    }
+
+    private bool IsOnMainRoadToTarget(BotComponent bot)
+    {
+        if (bot.CurrentZone is not RoadZoneComponent road) return false;
+        return road.roadType == RoadType.Main && road.roadToSite == targetSite;
+    }
+
+    private bool AllFlankersOnLink()
+    {
+        bool hasFlanker = false;
+        for (int i = 0; i < Bots.Count; i++)
+        {
+            BotComponent bot = Bots[i];
+            if (bot == null || bot.Role != BotRole.Flanker) continue;
+            hasFlanker = true;
+
+            if (targetSite != null && bot.IsInsideZone(targetSite)) continue;
+            if (!bot.IsOnPosition) return false;
+        }
+        return hasFlanker;
+    }
+
+    private void CacheAttackerSpawnCenter()
+    {
+        var spawns = MapManager.Instance != null ? MapManager.Instance.SpawnZones : null;
+        if (spawns == null || spawns.Count == 0)
+        {
+            _attackerSpawnCenter = Vector3.zero;
+            return;
         }
 
-        _isMovingToSite = true;
+        SpawnZoneComponent attacker = spawns[0];
+        for (int i = 1; i < spawns.Count; i++)
+        {
+            if (spawns[i] != null && spawns[i].transform.position.z < attacker.transform.position.z)
+                attacker = spawns[i];
+        }
+        _attackerSpawnCenter = attacker.transform.position;
+    }
+
+    private Vector3 GetSiteGoal() =>
+        targetSite != null ? targetSite.transform.position : Vector3.zero;
+
+    private bool ShouldGoDirectToSite() =>
+        targetSite != null
+        && directToSiteDistance > 0f
+        && Vector3.Distance(_attackerSpawnCenter, targetSite.transform.position) <= directToSiteDistance;
+
+    private void SendBotsTowardTargetSite()
+    {
+        if (targetSite == null) return;
+
+        Vector3 siteGoal = GetSiteGoal();
+
         foreach (var bot in Bots)
         {
             if (bot == null) continue;
-            if (bot.Role is BotRole.Attacker or BotRole.Flanker)
-                bot.MoveToZone(targetSite);
+
+            if (bot.IsInsideZone(targetSite))
+            {
+                bot.HoldZone(targetSite);
+                continue;
+            }
+
+            MapZoneComponent dest = ShouldGoDirectToSite()
+                ? targetSite
+                : bot.Role switch
+                {
+                    BotRole.Attacker => RoadOrSite(targetSite, RoadType.Main),
+                    BotRole.Flanker  => RoadOrSite(targetSite, RoadType.Link),
+                    BotRole.Scout    => RoadOrSite(targetSite, RoadType.Link),
+                    _              => targetSite
+                };
+
+            bot.MoveToZone(dest, siteGoal);
         }
+    }
+
+    private MapZoneComponent RoadOrSite(SiteZoneComponent site, RoadType type)
+    {
+        MapZoneComponent road = FindPreferredRoad(site, type);
+        return road != null ? road : site;
     }
 
     private MapZoneComponent FindPreferredRoad(SiteZoneComponent site, RoadType preferredType)
     {
         var roadZones = MapManager.Instance.RoadZones;
         var exact = roadZones.FirstOrDefault(zone => zone.roadToSite == site && zone.roadType == preferredType);
-        if (exact != null)
-            return exact;
+        if (exact != null) return exact;
 
         var sameSiteFallback = roadZones.FirstOrDefault(zone => zone.roadToSite == site);
-        if (sameSiteFallback != null)
-            return sameSiteFallback;
-
-        return roadZones.Count > 0 ? roadZones[Random.Range(0, roadZones.Count)] : null;
+        return sameSiteFallback;
     }
 
     // Weighted random по зональным весам из MapManager. Если все веса ≤ 0 — uniform random (старое поведение).

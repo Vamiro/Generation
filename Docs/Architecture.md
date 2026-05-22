@@ -432,7 +432,9 @@ distanceFalloff:
 - `role` (Attacker / Defender / Flanker / Scout) — назначается `TeamManager` в рантайме.
 - **Прицеливание:** `aimTurnSpeed` (град/сек) — скорость поворота тела к цели. Влияет визуально и косвенно на тайминг (доворот занимает время), но НЕ блокирует выстрел (раньше был `aimAngleTolerance` — удалён).
 - **Выбор цели:** `sightRange`, `distancePriorityWeight`, `threatPriorityBonus`.
-- **Reposition tick:** `repositionDelay`, `repositionJitter` — таймер, после которого бот в режиме idle меняет точку в текущей зоне.
+- **Навигация:** `arrivalRadius` (default 2 м). По дороге: `GetEntryPointNear` + `GetRandomForwardPoint` (разнос по sample, не одна ближайшая точка), `roadEntryPickRadius` / `roadForwardPickPortion`. `TrimLeadingPassedWaypoints` — не стоим на уже пройденной точке. Атакер: `TryEarlySiteHold()` — зашёл на `targetSite` → сразу `HoldZone`, без дохода до финиша дороги.
+- **Reposition tick:** `repositionDelay`, `repositionJitter` — таймер, после которого бот в режиме idle меняет точку в текущей зоне. На Site при `IsOnPosition` reposition **выключен** (не шатается по точке).
+- **Паритет атака/защита в `BotComponent`:** один `combatMoveSpeed`, одни `HoldZone` / `MoveToZone(road, siteGoal)` / `TryEarlySiteHoldOnMarch` / hold-reposition на Site. Разница только в `AttackerTeamManager` / `DefenderTeamManager` (роли, main/link, ротация, notify). **Hold на Site:** `siteHoldAccuracyMultiplier`, `siteHoldReposition*`. Ротация атаки блокируется при `HasCapturedTargetSite`.
 - **Скорости по ролям:** `attackerSpeed / defenderSpeed / flankerSpeed / scoutSpeed` — индивидуальные `NavMeshAgent.speed`.
 - `deathEffect` — префаб эффекта смерти.
 
@@ -465,17 +467,16 @@ distanceFalloff:
 - `NotifyDefenders` / `NotifyDefendersAboutRotate` — переподчинение ботов под смену атакуемого сайта.
 
 ### `AttackerTeamManager`
-- Распределение ролей вынесено в инспектор (`attackerCount / flankerCount / scoutCount`, default 2/2/1). Хвост сверх суммы (если `botsPerTeam` больше) получает Attacker.
-- Атакеры идут по Main, фланкеры по Link, скаут случайно по дорогам или в нейтральной (`scoutNeutralProbability` в инспекторе, default 0.5). Все движения — обычный `bot.MoveToZone(zone)` → случайная точка зоны.
-- **Выбор атакуемого сайта — weighted random по `site.GetWeight(BotRole.Attacker)`** (значения берутся из `MapManager.siteAWeights`/`siteBWeights`, см. §8). Если все веса 0 — uniform random. На референс-карте: `siteAWeights.attack = 1.0`, `siteBWeights.attack = 1.5` → атакеры в 1.5 раза чаще выбирают B.
-- Ротация цели: при разнице в численности `rotationThreshold` (инспектор, default 2) — все становятся Attacker и идут на новый сайт.
-- Когда все боты пришли на исходные позиции — синхронный заход на сайт через `bot.MoveToZone(targetSite)`.
+- Роли на матч **случайные**: `minAttackerCount` ≥ 2, остальное — случайный расклад Flanker/Scout (перемешивание по ботам). `_rolledFlankerCount` — ждём Link только если > 0.
+- Все роли идут к **текущему** `targetSite` (Main / Link / Scout на дорогу к этому сайту, без random road/neutral). `MoveToZone(road, siteGoal)` — от ближайшей точки дороги по цепочке waypoints к переднему краю (`GetPointToward`); `IsOnPosition` — в радиусе `arrivalRadius`, не точное совпадение с клеткой. Если спавн близко (`directToSiteDistance`, default 35 м) — сразу на сайт.
+- Ротация: при численном преимуществе (`rotationThreshold`) — следующий сайт, **но не если** `HasCapturedTargetSite` (есть Attacker/Flanker внутри текущего `targetSite`).
+- **Main (Attacker):** конец main или вход на site → сразу `MoveToZone` / `HoldZone(targetSite)`, без ожидания фланкеров. **Flanker:** если на матч выпали фланкеры, команда ждёт только их на Link, затем пускает на site. Scout не блокирует. На Site точки — непрерывно в коллайдере (`SiteZoneComponent.GetRandomPointInZone`), не по центрам клеток samplePoints.
+- Выбор сайта — weighted random по `site.GetWeight(Attacker)` (§8).
 
 ### `DefenderTeamManager`
-- Распределение защитников по сайтам — **weighted по `site.GetWeight(BotRole.Defender)`** (из `MapManager.siteAWeights`/`siteBWeights.defense`, см. §8). Если все веса 0 — равное по `defendersPerSite` на каждый сайт. Если веса заданы — пропорциональное распределение через largest-remainder method.
-- `scoutCount` (инспектор, default 1) — сколько ботов идут в Scout (нейтраль/дороги). Остаток после защитников.
+- На каждом сайте **минимум `minDefendersPerSite`** (default 2). При 5 ботах и 2 сайтах: обычно 2+2 на сайтах + 1 Scout; с вероятностью `extraDefenderOnSiteProbability` (default 0.25) — 3+2 (или 2+3) без скаута. Доп. защитники сверх минимума — по defense-весам (largest-remainder).
 - `initialPushCount` (`IntRange`, default 0..2) — сколько защитников каждого сайта **сразу на старте** идут на main вместо site-hold. Геометрический параметр: определяет, как часто атакеры встречают защитника на дороге vs на сайте. Минимум 1 бот всегда остаётся на site-hold (clamp к `count - 1`).
-- `AssignRoleSafe` для роли `Defender` → `bot.AssignRole(BotRole.Defender, zone)` → `MoveToZone(zone)` → случайная точка сайта.
+- `AssignRoleSafe` / push на main: `MoveToZone(road, siteGoal)` и `PushDefendersTowardSite` — та же логика занятия Site, что у атакующих на main.
 - Каждые `repositionDelay` сек (default 10) защитник с вероятностью `pushToRoadProbability` (default 0.5) выходит на дорогу. Выбор Main vs Link — по `roadPickMainBias` (default 0.67). **Эта пара параметров заменила прежние 3 веса `repositionMain/Link/Stay`** — упрощение в рамках §0.
 
 ---
@@ -645,7 +646,7 @@ public struct ZoneRoleWeights { public float attack, defense, flank, scout; }
 | Точка | Файл | Поведение |
 |---|---|---|
 | Выбор атакуемого сайта | `AttackerTeamManager.PickWeightedSite` | Weighted random по `siteA.GetWeight(Attacker)` vs `siteB`. Если все веса 0 → uniform random. |
-| Распределение защитников по сайтам | `DefenderTeamManager.ComputeDefendersDistribution` | Пропорциональное распределение через largest-remainder method. Если все веса 0 → равно по `defendersPerSite` на сайт. |
+| Распределение защитников по сайтам | `DefenderTeamManager.ComputeDefendersDistribution` | Минимум `minDefendersPerSite` на сайт; сверх — по defense-весам (largest-remainder). Лишний бот — Scout (75%) или +1 Defender на сайт. |
 
 **Что НЕ использует пока (точки будущей интеграции):**
 - `flank` / `scout` — не учитываются при выборе зоны для Flanker/Scout.

@@ -345,13 +345,13 @@ MonoBehaviour:
     max: 8
   siteZoneSize:
     min: 6
-    max: 10
+    max: 12
   neutralZoneSize:
-    min: 5
-    max: 10
+    min: 6
+    max: 12
   innerPadding: 4
   spawnHorizontalOffset: 3
-  siteLineBiasToDefender: 0.405
+  siteLineBiasToDefender: 0.388
   siteVerticalJitter: 2
   siteCenterDriftMax: 4
   siteMinCenterDistanceMultiplier: 2
@@ -368,16 +368,16 @@ MonoBehaviour:
     max: 0.4
   mainWaypointCount:
     min: 1
-    max: 1
+    max: 2
   mainWaypointOffset:
     min: 2
     max: 4
   linkWaypointCount:
-    min: 0
-    max: 1
-  linkWaypointOffset:
     min: 1
-    max: 3
+    max: 2
+  linkWaypointOffset:
+    min: 2
+    max: 4
   useFixedSeed: 1
   generationSeed: 764228756
   currentGenerationSeed: 764228756
