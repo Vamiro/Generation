@@ -361,7 +361,7 @@ A* с учётом штрафов и предпочтений.
 
 ### 4.9 Слой Covers (`MapGenerator.Covers.cs`)
 
-**Режим (`coverPlacementMode`, флаги):** `Prefabs` — укрытия; `WeightLabels` — TextMesh (`cellWeights`), ярко-зелёный→красный на всём полу (Site/Neutral/Spawn/дороги/комнаты). **Оба:** префабы, затем пересчёт и метки. Без меток: клетки выхода и Main/Link у входа (`CollectWeightLabelHiddenCells`).
+**Режим (`coverPlacementMode`, флаги):** `Prefabs` — укрытия; `WeightLabels` — TextMesh (`cellWeights`), ярко-зелёный→красный, **одинаковый размер**, чёрная обводка (`FloorWeightLabel`), на всём полу (Site/Neutral/Spawn/дороги/комнаты). **Оба:** префабы, затем пересчёт и метки. Без меток: клетки выхода и Main/Link у входа (`CollectWeightLabelHiddenCells`).
 
 **Вес клетки (`cellWeights`):** 4 луча (N/E/S/W), все пройденные клетки до `Wall` или **уже поставленного укрытия** (`coverOccupancy`); среднее `sum/4`. После **каждого** `PlaceCoverAt` — сразу `RecomputeCellWeightsFromRays()` по всей карте; следующий кандидат — по обновлённым весам.
 

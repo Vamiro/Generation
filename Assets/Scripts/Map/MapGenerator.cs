@@ -115,9 +115,8 @@ public partial class MapGenerator : MonoBehaviour
     [SerializeField, Tooltip("Включить шаг укрытий после генерации (префабы или метки весов).")] private bool enableCovers = true;
     [SerializeField, Tooltip("Флаги: Prefabs — укрытия; WeightLabels — числа веса на карте (Site/Neutral/Spawn/дороги). Оба: сначала префабы, потом метки.")] private CoverPlacementMode coverPlacementMode = CoverPlacementMode.Prefabs | CoverPlacementMode.WeightLabels;
     [SerializeField, Min(0.5f), Tooltip("Высота метки над полом в единицах blockSize.")] private float weightLabelHeight = 1.1f;
-    [SerializeField, Min(0.05f), Tooltip("Базовый размер символов TextMesh (масштаб × вес).")] private float weightLabelCharacterSize = 0.32f;
-    [SerializeField, Range(0.5f, 1.5f), Tooltip("Множитель размера для минимального веса на карте.")] private float weightLabelSizeMinMul = 0.85f;
-    [SerializeField, Range(0.5f, 2.5f), Tooltip("Множитель размера для максимального веса на карте.")] private float weightLabelSizeMaxMul = 1.55f;
+    [SerializeField, Min(0.05f), Tooltip("Размер символов TextMesh (× blockSize), одинаковый для всех весов.")] private float weightLabelCharacterSize = 0.32f;
+    [SerializeField, Range(0.02f, 0.25f), Tooltip("Толщина чёрной обводки метки в долях characterSize.")] private float weightLabelOutlineWidth = 0.08f;
     [SerializeField, Tooltip("Зоны для укрытий. Site/Neutral/Spawn — открытые клетки внутри зоны. Main/Link/Room — общий лимит дорог: у стены, случайно (Room и Pocket по всей карте).")] private CoverableZones coverableZones = CoverableZones.SiteNeutralRoom;
     [SerializeField, Min(1), Tooltip("Высота укрытия в блоках (количество уровней).")] private int coverHeight = 1;
     [SerializeField, Min(1), Tooltip("Мин. средний вес (сумма 4 лучей / 4, входы не считаются). Ниже — не ставим укрытие.")] private int coverMinOpenness = 2;

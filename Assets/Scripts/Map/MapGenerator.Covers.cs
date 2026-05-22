@@ -909,7 +909,7 @@ public partial class MapGenerator
         labelsRoot.transform.SetParent(geometryRoot, false);
 
         float y = blockSize * weightLabelHeight;
-        float baseCharSize = weightLabelCharacterSize * blockSize;
+        float charSize = weightLabelCharacterSize * blockSize;
 
         for (int x = 0; x < width; x++)
         {
@@ -919,7 +919,6 @@ public partial class MapGenerator
                     continue;
 
                 float t = DisplayToNormalized(display, minDisplay, maxDisplay);
-                float charSize = baseCharSize * Mathf.Lerp(weightLabelSizeMinMul, weightLabelSizeMaxMul, t);
                 Color color = Color.Lerp(WeightLabelColorLow, WeightLabelColorHigh, t);
 
                 GameObject labelGo = new GameObject($"W_{x}_{z}_{display}");
@@ -929,7 +928,7 @@ public partial class MapGenerator
 
                 labelGo.AddComponent<TextMesh>();
                 FloorWeightLabel label = labelGo.AddComponent<FloorWeightLabel>();
-                label.Configure(display.ToString(), font, charSize, color);
+                label.Configure(display.ToString(), font, charSize, color, weightLabelOutlineWidth);
             }
         }
     }

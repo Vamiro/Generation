@@ -183,7 +183,7 @@ Camera:
   far clip plane: 1000
   field of view: 60
   orthographic: 1
-  orthographic size: 80
+  orthographic size: 83
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -427,11 +427,10 @@ MonoBehaviour:
   outerWallThickness: 2
   outerWallHeight: 3
   enableCovers: 1
-  coverPlacementMode: -1
+  coverPlacementMode: 1
   weightLabelHeight: 1.1
   weightLabelCharacterSize: 0.7
-  weightLabelSizeMinMul: 0.85
-  weightLabelSizeMaxMul: 1.55
+  weightLabelOutlineWidth: 0.08
   coverableZones: -1
   coverHeight: 1
   coverMinOpenness: 2
@@ -574,7 +573,7 @@ MonoBehaviour:
   matchTimeout: 120
   betweenMatchesDelay: 2
   maxMatches: 0
-  simulationSpeed: 1
+  simulationSpeed: 14
   scaleFixedDeltaTime: 1
   simulationSpeedStep: 0.5
   enableSpeedHotkeys: 1
